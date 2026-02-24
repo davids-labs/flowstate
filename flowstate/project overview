@@ -1,0 +1,466 @@
+
+FlowState
+Revision 4
+Homescreen · Generic Module Engine · Countdown System
+The architecture that ends scope creep forever.
+
+Homescreen	Plan	Week	Day	Session
+
+What this revision locks in
+v4 does three things. First, it adds a Homescreen as the top level of the hierarchy — a personal dashboard that sits above planning entirely. Second, it replaces every specific module type with a single Generic Module Spec that can express any tracking behaviour by swapping a config object. Third, it adds the Countdown / Countup timer as the first homescreen-native module type. The result: you never have to redesign the architecture again to add something new. You just add a type to an enum and write one widget.
+
+ 
+PART 1 — The Complete Hierarchy
+
+1A. Homescreen → Plan → Week → Day → Session
+This is the locked, final navigation hierarchy for FlowState. Each level is a distinct surface with its own purpose, its own module slots, and its own analytics scope. Nothing floats outside this structure.
+
+Level	Purpose	User question it answers	Module types it hosts
+Homescreen	Personal command centre	What matters to me right now?	Countdown, Countup, Live Stats, Pinned modules
+Plan	Multi-week overview of imported CSV	What is the shape of the next N days?	Plan-level progress bars, completion rates
+Week	7-day operational view	How is this week going?	Weekly aggregates, week-scoped goals
+Day	Today’s execution surface	What do I do today and did I do it?	Checkbox, Rating, Data Input, Mandatory Session
+Session	A single timer run	How did this block of time go?	Focus Rating, mid-session Data Input, Block Notes
+
+1B. Navigation Model
+The app opens to the Homescreen every time. The hierarchy is a drill-down — you go deeper to plan and review, you surface to the Homescreen to live. There are no tabs between levels; there is a back button and a persistent 'Home' shortcut in the bottom navigation bar.
+
+•	Bottom nav bar has three items: Home (Homescreen), Today (jumps to today's Day Dashboard), Plan (opens the current Plan's Week view)
+•	Tapping a week in Plan opens the Week view. Tapping a day cell opens the Day Dashboard. Tapping a session card opens the Routine Player.
+•	The Homescreen is not inside the Plan hierarchy — it is above it. You can have no active plan and still use the Homescreen.
+•	The Now Bar (Android) and system tray (desktop) always reflect today's active session state regardless of which level you're viewing.
+
+1C. What Each Level Owns
+Clarity on what each level is responsible for prevents features from leaking into the wrong place:
+
+•	Homescreen owns: pinned module display, countdown timers, today's snapshot card, global streaks, quick-start buttons
+•	Plan owns: CSV import/export, plan versioning, the date-range overview grid, plan-level progress (e.g. '47 of 136 days completed')
+•	Week owns: 7-day summary, week-level module aggregates, weekly narrative (from v2), weekly goal tracking
+•	Day owns: must-do checklist, day-level modules, mandatory sessions, day completion status, day notes
+•	Session owns: the timer (routine player), block-level events, session debrief card, session-level modules
+
+ 
+PART 2 — The Generic Module Engine
+
+2A. Why Generic Modules
+The problem this solves
+Every time you have a new idea — a skincare checkbox, a water tracker, a countdown timer, a mood rating — the old approach required designing a new feature, a new screen section, new database columns, and new analytics logic. This is why apps get bloated or stagnate. The Generic Module Engine inverts this: you define the structure once. Adding a new behaviour is just adding a new type constant and writing one renderer widget. The database, the placement system, the analytics pipeline, and the UI scaffolding all already exist.
+
+2B. The Module Spec — The Core Data Structure
+Every module in FlowState — whether it lives on the Homescreen, the Day Dashboard, or inside a Session — is described by a single ModuleSpec object. This is the contract between the module engine and every surface in the app.
+
+class ModuleSpec {
+  final String id;            // unique, user-chosen: 'holiday_countdown', 'daily_steps'
+  final ModuleType type;      // the closed enum (see section 2C)
+  final String label;         // display name: 'Holiday Countdown', 'Water Intake'
+  final String? emoji;        // optional icon: '🏖', '💪', '💧'
+  final Map<String, dynamic> config; // type-specific settings (see 2D)
+  final List<Surface> placements;    // which levels can host this module
+  final bool isLive;          // true = computed in real time, false = user-entered value
+  final bool required;        // if true and not filled, day/session is incomplete
+  final bool showInSummary;   // show as a chip in week/plan overview cells
+}
+
+The key distinction is isLive. A live module (countdown timer, countup timer, auto-step-count) computes its value on render from a formula or device sensor. A logged module (water intake, weight, mood rating) stores a user-entered value keyed to a specific date and time. These two classes of module have different database representations and different analytics treatments, but they share the same ModuleSpec shell.
+
+2C. The Module Type Enum
+This is the closed list of types. Adding a new type means: add a constant here, write one renderer widget, write one config parser. Everything else is inherited from the engine.
+
+Type	isLive	User interaction	Value stored	Analytics
+countdown	Yes	Read-only display	None (computed)	Progress % to target date
+countup	Yes	Read-only display	None (computed)	Days/time since origin
+checkbox	No	Tap to toggle	Boolean	Compliance rate over time
+rating	No	Tap 1–5	Integer 1–5	Average, trend
+data_input	No	Enter a number	Decimal + unit	Sum, average, vs target
+mandatory_session	No	Tap Play button	Session record ref	Completion rate
+text_note	No	Type text	String	Searchable log
+progress_bar	Yes	Read-only display	None (computed)	% through a range
+streak_counter	Yes	Read-only display	None (computed)	Current + best streak
+
+The last three types — text_note, progress_bar, streak_counter — are creative additions that fall naturally out of the generic engine. They cost almost no extra engineering because the scaffolding exists. Details on each in section 2E.
+
+2D. Config Objects by Type
+The config field is a JSON object whose shape is determined by the type. The module engine reads the type first, then parses the config with a type-specific parser. Invalid config keys are ignored; missing required keys fall back to defaults.
+
+countdown config
+{ "targetDate": "2026-07-09",     // YYYY-MM-DD, required
+  "startDate": "2026-02-22",       // YYYY-MM-DD, optional (for progress bar)
+  "displayMode": "dhms",           // "dhms" | "days" | "weeks" | "auto"
+  "showProgressBar": true,         // show fill from startDate to targetDate
+  "alertDays": [30, 14, 7, 1],     // notify X days before target
+  "finishedLabel": "Holiday!",     // what to show when countdown hits 0
+  "countPastZero": false }         // if true, count upward after target date
+
+countup config
+{ "originDate": "2003-08-14",      // the past date to count from
+  "displayMode": "days",           // "days" | "dhms" | "years_days" | "auto"
+  "label": "Days since my birthday",
+  "milestones": [100, 365, 1000] } // notify on these day counts
+
+checkbox config
+{ "confirmOnTap": false,           // show "Are you sure?" before toggling
+  "resetDaily": true,              // value resets to false each new day
+  "streak": true }                 // track consecutive-day streak for this checkbox
+
+rating config
+{ "scale": 5,                      // 5 or 10
+  "style": "stars",                // "stars" | "dots" | "numbers" | "emoji"
+  "emojiSet": null,                // if style=emoji: ["😞","😐","🙂","😊","😄"]
+  "resetDaily": true }
+
+data_input config
+{ "unit": "ml",                    // display unit: ml, steps, kg, kcal, hrs, etc.
+  "target": 2500,                  // daily target (optional)
+  "targetType": "minimum",         // "minimum" | "maximum" | "exact"
+  "allowDecimal": false,           // integer vs decimal input
+  "resetDaily": true,              // clear value each new day
+  "cumulativeEntry": true }        // add to existing value vs replace it
+
+cumulativeEntry is a subtle but important config key: if true, each time you enter a number it adds to the running total for the day (e.g. you log 300ml at lunch and 400ml at dinner, total becomes 700ml). If false, each entry replaces the previous value (e.g. your weight reading for the day).
+
+progress_bar config
+{ "startDate": "2026-02-22",
+  "endDate": "2026-07-09",
+  "label": "Days into holiday plan",
+  "style": "linear",               // "linear" | "circular" | "calendar_heatmap"
+  "showDaysRemaining": true,
+  "showPercentage": true }
+
+streak_counter config
+{ "sourceModuleId": "skincare_am", // which module to track the streak of
+  "graceHours": 4,                 // hours past midnight before a day is "missed"
+  "displayMode": "days",           // "days" | "weeks"
+  "showBest": true }               // show all-time best streak alongside current
+
+2E. The Three Creative Module Types
+These fall naturally out of the generic engine and add meaningful surface area without meaningful engineering cost.
+
+📝  Text Note   type: text_note
+A free-text field the user can write anything in. Resets daily. Stores a timestamped string. Surfaces in the session debrief and day summary. Searchable in analytics. Use cases: 'what I learned today', 'what distracted me', 'how I feel about this session'. Not a journal app — just a capture field.
+Config keys:
+"maxLength": 500
+"prompt": "What did you learn today?"
+"resetDaily": true
+Surfaces: Day · Session
+
+📊  Progress Bar   type: progress_bar
+A live-computed visual showing how far through a date range you are. Requires only startDate and endDate in config. Useful on the Homescreen to show '47 of 136 days through your holiday plan' at a glance. Can render as a linear bar, a circular ring, or a calendar heatmap strip. Not linked to task completion — purely date-based.
+Config keys:
+"startDate": "2026-02-22"
+"endDate": "2026-07-09"
+"style": "circular"
+"showDaysRemaining": true
+Surfaces: Homescreen · Plan
+
+🔥  Streak Counter   type: streak_counter
+Points at another module by ID and counts how many consecutive days that module was completed or filled. Automatically updates at midnight. Shows current streak and all-time best. Has a grace period config (e.g. 4 hours past midnight) for users who log before bed. The streak is broken if the source module is not logged by the grace deadline.
+Config keys:
+"sourceModuleId": "skincare_am"
+"graceHours": 4
+"showBest": true
+Surfaces: Homescreen · Week
+
+ 
+PART 3 — The Homescreen
+
+3A. What the Homescreen Is
+Design philosophy
+The Homescreen is not a navigation menu. It is not a week view. It is your personal cockpit — the things you want to see the moment you open FlowState, every time, regardless of what day it is or whether you have an active plan. It answers one question: 'What matters to me right now?' It is fully user-configured using the module system. No two users’ Homescreens need to look the same.
+
+3B. The Homescreen Layout
+The Homescreen is a vertically scrolling canvas divided into three zones:
+
+Zone 1 — The Live Zone (top, always visible)
+Pinned live modules. These are the modules where isLive = true — they compute in real time and update without user input. The user pins up to 4 live modules here. On first open, FlowState suggests: today's date + day number into the plan, plus any countdown timers the user has set up.
+•	Height: fixed. Each live module gets a card. Max 4 cards in a 2x2 grid on phone, 1x4 row on desktop.
+•	Live modules eligible for Zone 1: countdown, countup, progress_bar, streak_counter, and a special 'Today Snapshot' pseudo-module (see 3C).
+•	Tapping a live module card opens its detail screen (e.g. tapping a countdown opens the Countdown Detail with full display and edit controls).
+
+Zone 2 — Today's Snapshot (middle, auto-generated)
+A fixed card that FlowState generates automatically every day at midnight. It cannot be removed but can be minimised. It shows:
+•	Today's title from the active plan (or just 'Tuesday, February 22' if no plan)
+•	Must-do item count: '3 items — tap to open Day'
+•	Session status: 'Morning Walk • pending  |  Study Block • pending'
+•	Day module completion chips: a horizontal row of coloured dots, one per required day module — grey = not done, green = done, red = missed
+•	A single large button: the label changes based on state: 'Start Day' (nothing started), 'Resume' (session in progress), 'Review Day' (everything complete)
+
+Zone 3 — Pinned Logged Modules (bottom, scrollable)
+Logged modules (checkbox, rating, data_input) that the user has pinned to the Homescreen. These are the modules the user wants to log quickly without navigating to the Day Dashboard. Examples: tap to log water intake, tap to check off vitamins, tap to rate mood. Data entered here is saved to today's DayPlan exactly as if entered from the Day Dashboard.
+•	No limit on how many logged modules can be pinned here, but the UI recommends 3–5 for usability.
+•	Modules show their current today value and target. A data_input module shows a mini progress bar.
+•	A checkbox module shows its state and a tick animation when tapped.
+•	Tapping 'Manage modules' at the bottom of Zone 3 opens the Module Manager screen.
+
+3C. The Today Snapshot Pseudo-Module
+This is a special built-in live module that cannot be deleted or moved out of Zone 2. It is not in the ModuleType enum because it is not user-configurable — it is assembled by FlowState at render time from the active DayPlan. However, it follows the visual language of the module system and uses the same card component.
+On days with no active plan, it shows: the date, a motivational line from a small curated set ('No plan today. Good day to make one.'), and a quick-start button for the last used routine.
+
+3D. The Module Manager Screen
+Accessible from Zone 3 of the Homescreen and from Settings. This is the control panel for the entire module system:
+•	A list of all user-defined ModuleSpecs with their type, label, emoji, and which surfaces they're pinned to
+•	+ New Module button — opens a creation flow: pick type → enter label and emoji → fill config fields → choose placements → save
+•	Each existing module has: Edit, Remove from [surface], Archive, Delete
+•	Archive hides a module from all surfaces without deleting its historical data — so if you stop tracking something mid-plan, you don't lose the records
+•	A preview panel shows exactly how the module card will look on each surface before saving
+
+ 
+PART 4 — Countdown & Countup Timers
+
+4A. The Two Timer Types
+These are the most emotionally resonant modules in FlowState. A countdown to an exam creates urgency. A countup from a start date creates identity. Both are live modules — they compute in real time, require no user input to update, and can sit permanently on the Homescreen as anchors.
+
+4B. Countdown Timer
+A countdown is a ModuleSpec with type = countdown. It has a targetDate and an optional startDate. The displayed value is computed as:
+
+remaining = targetDate.difference(DateTime.now())
+// Display options:
+// 'dhms':  136d  04h  22m  11s
+// 'days':  136 days
+// 'weeks': 19 weeks and 3 days
+// 'auto':  chooses dhms when < 7 days, days when < 60 days, weeks otherwise
+
+Display modes in detail
+Mode	When it shows	Example
+dhms	Always (or when < 7 days in auto)	136d 04h 22m 11s
+days	Always	136 days
+weeks	Always	19 weeks and 3 days
+auto	Adapts to proximity	> 60 days: weeks view. 7–60 days: days view. < 7 days: dhms view.
+
+The progress bar option
+When showProgressBar = true and startDate is set, a horizontal fill bar appears beneath the countdown. The fill represents how far through the total range you are. For the holiday example: startDate Feb 22, targetDate Jul 9, today Feb 25 — bar is 2.2% full. As days pass, the bar fills. This makes the passage of time visible rather than just the remaining time.
+
+The bar has two colour zones: the filled portion (what you've lived through) and the empty portion (what remains). Both colours are configurable per-module using the app's accent system.
+
+Alert system
+•	alertDays is a list of integers, e.g. [30, 14, 7, 3, 1]
+•	When the remaining days matches an alert threshold, a notification fires: 'Holiday in 30 days. Are you on track?'
+•	The notification links directly to the Plan view so the user can review progress
+•	Alert notifications are opt-in per countdown module, not global
+
+countPastZero option
+If countPastZero = true, when the countdown reaches 0:00:00:00 it does not stop or show 'finished'. Instead it immediately flips to counting upward from zero. The label changes to the finishedLabel config value: e.g. 'Holiday!' with a '+' prefix on the count. This is the behaviour you'd want for a birthday — the day of, it hits zero, then counts how long since midnight.
+
+4C. Countup Timer
+A countup is a ModuleSpec with type = countup. It has an originDate (always in the past) and counts upward from that date. The use cases: days since birthday, days since starting a habit, days since a meaningful life event.
+
+elapsed = DateTime.now().difference(originDate)
+// Display modes:
+// 'days':         Day 847
+// 'dhms':         847d 06h 14m 33s
+// 'years_days':   2 years, 117 days
+// 'auto':         years_days when > 365 days, days otherwise
+
+Milestones
+•	milestones is a list of integers representing day counts: [100, 365, 500, 1000]
+•	When the elapsed count reaches a milestone, a celebratory notification fires: 'Day 100 since you started FlowState!'
+•	Milestone days get a special indicator on the Homescreen card — a small badge or a colour accent change for that day
+
+Creative use cases for countup
+•	Days since birthday — 'Day 8,247 of your life'
+•	Days since starting a diet / fitness programme — 'Day 14 of holiday prep'
+•	Days since a personal milestone — sobriety, a relationship, moving to a city
+•	Days since you started studying a subject — 'Day 62 of learning Maths'
+•	Days since you started using FlowState — a meta-counter that builds identity with the app
+
+4D. The Countdown Detail Screen
+Tapping any countdown or countup card on the Homescreen opens its Detail Screen. This is a full-screen, minimal display — inspired by the Routine Player's focus aesthetic:
+
+•	Large centred display: the primary count (days, or dhms) fills 40% of the screen
+•	Below it: the targetDate or originDate with a human label ('Holiday • Jul 9, 2026')
+•	If showProgressBar: a full-width progress bar with start and end labels
+•	A small stats section: total duration of the range, percentage elapsed, a note field
+•	Edit button (pencil icon): opens the module config editor for this countdown
+•	Share button: exports the countdown as a shareable image — the count, label, and progress bar rendered as a clean graphic. Useful for screenshots to Notion or sending to someone.
+
+ 
+PART 5 — Module Placement & Rendering
+
+5A. How Placements Work
+Every ModuleSpec has a placements field: a list of surfaces where that module can appear. The surface enum matches the hierarchy exactly:
+
+enum Surface { homescreen, plan, week, day, session }
+
+A module with placements = [Surface.homescreen, Surface.day] will appear in the Homescreen module manager and the Day module manager, but not in the Session or Week module managers. The user can independently pin it to any of its allowed surfaces.
+A module with placements = [Surface.session] is session-scoped — it only appears in the session debrief or mid-session card. A 'Focus Quality' rating module would be session-scoped: it makes no sense to ask for focus quality at the week level.
+
+5B. The Placement Matrix
+This table shows which module types are allowed on which surfaces. This is a design constraint, not a technical one — it prevents modules from appearing in nonsensical contexts.
+
+Module Type	Homescreen	Plan	Week	Day	Session
+countdown	✓	✓	✓	—	—
+countup	✓	✓	✓	—	—
+progress_bar	✓	✓	✓	—	—
+streak_counter	✓	—	✓	—	—
+checkbox	✓	—	—	✓	✓
+rating	✓	—	—	✓	✓
+data_input	✓	—	—	✓	✓
+mandatory_session	—	—	—	✓	—
+text_note	—	—	—	✓	✓
+
+5C. The Module Renderer
+The Module Renderer is a single Flutter widget — ModuleCard — that takes a ModuleSpec and a Surface and renders the appropriate UI. It uses a switch on ModuleSpec.type to delegate to a type-specific sub-widget. This is the one widget you write per new type:
+
+class ModuleCard extends StatelessWidget {
+  final ModuleSpec spec;
+  final Surface surface;
+  final dynamic currentValue; // null for live modules
+  final Function(dynamic)? onValueChanged; // null for live modules
+
+  @override
+  Widget build(BuildContext context) {
+    return switch (spec.type) {
+      ModuleType.countdown => CountdownCard(spec: spec),
+      ModuleType.countup => CountupCard(spec: spec),
+      ModuleType.checkbox => CheckboxCard(spec: spec, value: currentValue, onChange: onValueChanged),
+      ModuleType.rating => RatingCard(spec: spec, value: currentValue, onChange: onValueChanged),
+      ModuleType.data_input => DataInputCard(spec: spec, value: currentValue, onChange: onValueChanged),
+      ModuleType.progress_bar => ProgressBarCard(spec: spec),
+      ModuleType.streak_counter => StreakCard(spec: spec),
+      ModuleType.text_note => TextNoteCard(spec: spec, value: currentValue, onChange: onValueChanged),
+      ModuleType.mandatory_session => MandatorySessionCard(spec: spec, value: currentValue),
+    };
+  }
+}
+
+Every new module type you add in future requires: one enum constant, one case in this switch, one sub-widget. That is the entire cost of extensibility.
+
+ 
+PART 6 — Database Schema for the Module Engine
+
+6A. New and Updated Tables
+The v3 schema introduced DayPlan, WeekPlan, and ModuleInstance. v4 extends and clarifies these to accommodate live modules, homescreen placement, and the generic config system.
+
+ModuleSpecs table (Drift / SQLite)
+One row per user-defined module. This is the master library.
+
+class ModuleSpecsTable extends Table {
+  TextColumn get id => text()();                        // PK: 'holiday_countdown'
+  TextColumn get typeStr => text()();                   // 'countdown', 'checkbox', etc.
+  TextColumn get label => text()();                     // 'Holiday Countdown'
+  TextColumn get emoji => text().nullable()();          // '🏖'
+  TextColumn get configJson => text()();               // JSON blob
+  TextColumn get placementsJson => text()();           // JSON array of surface strings
+  BoolColumn get isLive => boolean().withDefault(const Constant(false))();
+  BoolColumn get required => boolean().withDefault(const Constant(false))();
+  BoolColumn get showInSummary => boolean().withDefault(const Constant(true))();
+  BoolColumn get isArchived => boolean().withDefault(const Constant(false))();
+  DateTimeColumn get createdAt => dateTime()();
+  @override Set<Column> get primaryKey => {id};
+}
+
+ModuleValues table (Drift / SQLite)
+One row per logged value. Live modules have no rows here. Logged modules get one row per surface instance per day (or per session for session-scoped modules).
+
+class ModuleValuesTable extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get moduleSpecId => text()();              // FK to ModuleSpecsTable
+  TextColumn get surfaceStr => text()();               // 'day', 'session', etc.
+  TextColumn get contextKey => text()();               // date string OR session ID
+  TextColumn get valueJson => text().nullable()();     // JSON: bool, int, float, string
+  DateTimeColumn get loggedAt => dateTime()();
+  DateTimeColumn get updatedAt => dateTime()();
+}
+
+contextKey is either a date string ('2026-02-22') for day-scoped modules or a session UUID for session-scoped modules. This single table handles all logged module types across all surfaces.
+
+HomescreenLayout table (Drift / SQLite)
+Stores which modules are pinned to each zone of the Homescreen and in what order.
+
+class HomescreenLayoutTable extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get moduleSpecId => text()();
+  IntColumn get zone => integer()();                    // 1 = Live, 3 = Logged
+  IntColumn get sortOrder => integer()();
+}
+
+Firestore mirror structure
+Firestore mirrors the local SQLite schema for sync. The collection paths:
+
+/users/{uid}/moduleSpecs/{specId}          ← mirrors ModuleSpecsTable
+/users/{uid}/moduleValues/{contextKey}     ← map of specId → valueJson for that day
+/users/{uid}/homescreenLayout              ← single document with zone arrays
+
+6B. The Live Module Runtime
+Live modules are never stored in ModuleValues — their values are computed on every render from their config. This means:
+•	Countdown: value = config.targetDate.difference(DateTime.now())
+•	Countup: value = DateTime.now().difference(config.originDate)
+•	Progress bar: value = (DateTime.now() - config.startDate) / (config.endDate - config.startDate)
+•	Streak counter: value = query ModuleValues for sourceModuleId, count consecutive days with a truthy value ending at yesterday
+The streak counter is the only live module that requires a database read — the others are pure arithmetic. This query is cached and invalidated at midnight.
+
+ 
+PART 7 — Creative Additions
+
+7A. The 'Day X of Y' Aesthetic
+One small but powerful detail: everywhere in the app that shows a date from an active plan, FlowState should also show the plan day number. Not just 'Tuesday, February 22' but 'Tuesday, February 22 · Day 1 of 136'. This creates a sense of being inside a narrative, not just tracking data. The Homescreen Today Snapshot, the Day Dashboard header, the notification, the Now Bar — all of them should surface this when a plan is active.
+The implementation is trivial: it's a computed field on DayPlan. But psychologically it transforms the app from a tool into a journey.
+
+7B. Module Groups
+When a user has many modules, the Homescreen and Day Dashboard can become cluttered. Module Groups solve this without adding a new data structure: a group is just a ModuleSpec with type = group that contains an ordered list of child module IDs. The group renders as a collapsed card with a label and a summary line ('3 of 4 done'), expandable with a tap. This lets a user group related modules: 'Morning Routine' (skincare AM, vitamins, water), 'Evening Routine' (skincare PM, journalled), 'Health Stats' (steps, weight).
+
+7C. The 'Intention' Field on Countdown Timers
+When a user creates a countdown, they are prompted for one optional field: 'What does this date mean to you?' (max 140 characters). This is stored as config.intention. It surfaces on the Countdown Detail Screen as a small italic line beneath the date label: 'To prove to yourself that discipline compounds.'
+This sounds minor. It is not. It is the difference between a number and a reason. Every time the user opens that screen, they see why the countdown exists. It is particularly powerful for long-range goals where motivation dips mid-way.
+
+7D. The 'Last Seen' Countup
+A special countup variant where the counter resets automatically when the user logs a specific activity. Config: { 'resetOnModuleId': 'workout_done', 'label': 'Days since last workout' }. When the checkbox module 'workout_done' is ticked, this countup resets to 0 and starts climbing again. This creates a 'how long has it been?' accountability display without any user management. A fitness tracker equivalent of the 'days since last accident' sign.
+
+7E. The Homescreen as a Widget
+On Android, the Homescreen module grid can be exposed as a home screen widget (the Android launcher widget, distinct from the FlowState Homescreen). A 4x2 widget showing: the active countdown, today's title and day number, and a row of module completion dots. One tap opens FlowState directly to the Today view. This is the most glanceable possible version of FlowState — you see your mission and your progress without unlocking your phone.
+
+7F. Quiet Days
+A Quiet Day is a DayPlan with no sessions, no required modules, and a special status flag: 'quiet'. It appears in the Week view as a different colour (muted, not grey which implies missed). The user can import quiet days via CSV ('quiet' in a special column) or mark any day as quiet manually. The weekly narrative acknowledges quiet days differently: 'You took Saturday off. Intentional rest is part of the plan.' This matters because apps that treat every missed day as a failure create a punitive relationship with planning. Quiet days make rest a first-class concept in the system.
+
+7G. The Streak Display Format Idea
+For countdown timers that are close to a milestone (e.g. 3 days until a 100-day streak, 7 days until an exam), the Homescreen card subtly changes its visual style — the border gets an animated gradient, the number gets slightly larger. It is not a pop-up, not a notification, not a badge. Just a visual intensity shift that communicates 'you're getting close' without demanding attention. The threshold for this change is configurable per-module (defaulting to 10% of the total range or 7 days, whichever is smaller).
+
+ 
+PART 8 — The Locked Architecture: One Page
+
+8A. The Definitive FlowState Architecture
+This is everything locked in across v1 through v4. This is the single source of truth.
+
+Hierarchy (locked)
+Level	Opens from	Core content	Nav shortcut
+Homescreen	App launch	Live modules, Today Snapshot, pinned logged modules	Home tab
+Plan	Home > Plan tab	Date-range grid, CSV import/export, plan progress	Plan tab
+Week	Plan > tap week	7-day grid, weekly modules, weekly narrative	Back
+Day	Week > tap day	Must-do list, day modules, session cards	Today tab
+Session	Day > tap Play	Routine Player (timer), block events, debrief	Back
+
+Module Types (locked enum)
+Type	Live?	Surfaces	Value type
+countdown	Yes	Homescreen, Plan, Week	Computed from targetDate
+countup	Yes	Homescreen, Plan, Week	Computed from originDate
+progress_bar	Yes	Homescreen, Plan, Week	Computed from date range
+streak_counter	Yes	Homescreen, Week	Computed from source module
+checkbox	No	Homescreen, Day, Session	Boolean
+rating	No	Homescreen, Day, Session	Integer 1–5
+data_input	No	Homescreen, Day, Session	Decimal + unit
+mandatory_session	No	Day only	Session record reference
+text_note	No	Day, Session	String
+
+CSV Import Format (locked)
+Column group	Columns	Notes
+Required	date, title, must_do	date: YYYY-MM-DD. must_do split on ; in UI.
+Sessions	session_1_routine through session_5_routine + _time + _label	Up to 5 sessions per day
+Module targets	target_{moduleId}, require_{moduleId}	Any module ID in the user's library
+Tracking (written by FlowState)	done, {moduleId} for each logged module	Never overwritten on re-import
+Special	quiet (yes/no)	Marks the day as a Quiet Day
+
+Technology stack (locked)
+Layer	Technology	Reason
+Language	Dart	Single language for all platforms
+UI Framework	Flutter 3.x	One codebase → Android APK + desktop app
+Local DB	Drift (SQLite)	Type-safe, offline-first, identical on all platforms
+State Management	Riverpod	Clean separation of UI and logic
+Cloud Sync	Firebase Firestore	Real-time, free tier, offline persistence built-in
+Auth	Firebase Auth (anonymous → Google)	Zero-friction start, upgradeable
+IDE	VS Code + Flutter extension	Lightweight, hot reload, good Dart support
+Desktop tray	system_tray package	System tray icon with live timer
+Notifications	flutter_local_notifications	Handles both mobile and desktop
+
+
+End of FlowState Revision 4 — The Complete Architecture
+Homescreen → Plan → Week → Day → Session.
+One module engine. Every feature you will ever need.

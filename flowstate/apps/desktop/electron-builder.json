@@ -1,0 +1,34 @@
+{
+  "appId": "com.flowstate.desktop",
+  "productName": "FlowState",
+  "directories": {
+    "output": "release"
+  },
+  "files": [
+    "dist/**/*",
+    "electron/**/*",
+    "package.json"
+  ],
+  "mac": {
+    "category": "public.app-category.productivity",
+    "icon": "public/icon.png",
+    "target": ["dmg", "zip"],
+    "hardenedRuntime": true,
+    "gatekeeperAssess": false
+  },
+  "win": {
+    "icon": "public/icon.png",
+    "target": ["nsis", "portable"],
+    "publisherName": "FlowState"
+  },
+  "nsis": {
+    "oneClick": true,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": false
+  },
+  "linux": {
+    "icon": "public/icon.png",
+    "target": ["AppImage", "deb"],
+    "category": "Utility"
+  }
+}

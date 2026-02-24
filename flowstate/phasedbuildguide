@@ -1,0 +1,144 @@
+Plan: FlowState Full Build — Phase 1 through Phase 8
+TL;DR — The project has a working monorepo with ~85% of Phase 1's UI shell built using fake data. Everything from Phase 2 onward is unstarted — no database, no timer engine, no state management, no sync. This plan extends the build guide's 5 phases into 8 phases to cover the full feature set from the project overview (analytics, module manager, polish, deployment). Each phase builds on the previous and has a clear "done" gate. The immediate blocker is a stale Metro cache error for lucide-react-native which should be cleared first.
+
+Phase 0 — Fix Current Errors & Complete Phase 1 Gaps 
+Why: Phase 1 is ~85% done but has gaps and a Metro error blocking development.
+
+Clear the Metro error — The lucide-react-native error is from a stale cache. The package is referenced in node_modules but not importable. Run npx expo start --clear to reset the Metro bundler cache. If it persists, delete node_modules and reinstall with npm install.
+Fix index.ts — Currently exports from empty directories (./timer, ./modules, etc.), which will cause build failures. Add placeholder index.ts files in each subdirectory that export empty objects, or comment out the barrel exports until each module is implemented.
+Fix turbo.json — Remove .next/** output references (leftover from create-turbo template). Replace with correct output paths for Expo and Vite builds.
+Build the Week view — Create apps/mobile/app/week/[weekId].tsx showing a 7-day grid with day titles, session counts, and module completion dots. Navigate there from Plan screen tap. Use fake data.
+Make CountdownCard live — Update CountdownCard.tsx to compute remaining time from config.targetDate using Date.now(), and tick every second via setInterval in a useEffect.
+Build CountupCard — New component at apps/mobile/components/modules/CountupCard.tsx computing elapsed time from config.originDate.
+Done gate: All screens navigable on phone, countdown ticks live, no Metro errors.
+
+Phase 1 — Shared Types & Core Package Foundation (2–3 days)
+Why: Before adding persistence, the @flowstate/core package needs real type definitions and interfaces that both apps will share.
+
+Define all shared types in types:
+ModuleSpec.ts — the full ModuleSpec interface, ModuleType enum, Surface enum (matching the project overview Part 2B/2C)
+DayPlan.ts — DayPlan, WeekPlan interfaces
+Routine.ts — Routine, RoutineBlock interfaces
+Session.ts — Session, SessionEvent interfaces
+TimerState.ts — TimerPhase, TimerState interfaces
+Install shared dependencies in package.json: zod, date-fns
+Build Zod schemas in packages/core/src/types/schemas.ts — validation schemas for ModuleSpec.config per type (countdown config, checkbox config, etc.)
+Migrate fakeData.ts — Update fakeData.ts to import types from @flowstate/core instead of defining them locally
+Build the generic ModuleCard renderer — A switch component at apps/mobile/components/modules/ModuleCard.tsx that takes a ModuleSpec + Surface and delegates to the correct sub-card (matching Part 5C of the project overview)
+Done gate: All types defined in core, Zod schemas validate module configs, mobile app compiles using shared types.
+
+Phase 2 — Local Storage & Timer Engine (4–5 days)
+Why: This is the first "real" phase — the app gains persistence and a working timer.
+
+Install database dependencies — expo-sqlite and drizzle-orm in mobile, drizzle-kit as dev dependency in core
+Define Drizzle schema in packages/core/src/db/schema.ts — tables for routines, routineBlocks, dayPlans, moduleSpecs, moduleValues, sessions, eventLog, homescreenLayout (matching Part 6A of the project overview)
+Build database queries in packages/core/src/db/queries.ts — CRUD for all tables, upsertModuleValue(), getModuleValuesForDate(), getDayPlan(), importDayPlans()
+Initialize SQLite — Add SQLiteProvider to _layout.tsx, run Drizzle migrations on app launch
+Build TimerEngine in packages/core/src/timer/TimerEngine.ts — Timestamp-based (not counter-based). Methods: play(), pause(), resume(), skip(), end(). Getter: remaining computes from Date.now() - startedAt - totalPausedMs
+Install and configure Zustand — npm install zustand in mobile app
+Build Zustand stores:
+apps/mobile/stores/timerStore.ts — wraps TimerEngine, exposes phase, remaining, blockIndex
+apps/mobile/stores/dayStore.ts — loads today's DayPlan + module values from SQLite
+apps/mobile/stores/moduleStore.ts — loads all ModuleSpec records, handles value changes
+Wire Routine Player — Connect apps/mobile/app/session/[id].tsx to timerStore. Replace hardcoded "25:00" with live computed value. Handle block transitions, overdue state (timer goes red and counts up).
+Wire module cards to SQLite — CheckboxCard, RatingCard, DataInputCard save values via upsertModuleValue() on change, load from SQLite on mount
+Background timer notification — Install expo-notifications + expo-task-manager. Show a persistent notification with remaining time while a session is running. Update every second from a background task.
+Done gate: Timer ticks correctly, survives backgrounding, values persist across app restarts, notification shows live countdown.
+
+Phase 3 — CSV Import (3 days)
+Why: This is the core feature — importing a training/study plan from a spreadsheet.
+
+Install dependencies — expo-document-picker, expo-file-system, csv-parse in mobile app; csv-parse in core package
+Build CSV parser in packages/core/src/csv/parser.ts — Parses columns: date, title, must_do, session_N_routine/_time/_label, target_{moduleId}, require_{moduleId}, quiet
+Build CSV validator in packages/core/src/csv/validator.ts — Uses Zod schemas. Returns { errors: ValidationError[], warnings: string[] }. Errors block import; warnings allow it.
+Create import UI flow — Three screens: app/import/pick.tsx (document picker), app/import/preview.tsx (row count, date range, routines found/missing, errors list, Import/Cancel buttons), app/import/success.tsx
+Build the import writer in packages/core/src/db/queries.ts — importPlan() function. Upserts dayPlans (plan fields only, never overwrites logged values). Creates pending session records. Sets module targets.
+Wire Plan and Week views to SQLite — Replace fake data in apps/mobile/app/(tabs)/plan.tsx/plan.tsx) and week view with live queries from the database
+Done gate: Pick a CSV on phone, see validation preview, import it, Week/Day views populate with real plan data.
+
+Phase 4 — Countdown Modules & Homescreen (2–3 days)
+Why: Make the Homescreen a live personal dashboard with real module data.
+
+Build the Module Manager screen — app/modules/index.tsx (list all ModuleSpec records), app/modules/create.tsx (pick type → config form → placement picker → save). Accessible from Homescreen Zone 3 "Manage modules" button and from Settings.
+Build all remaining module cards:
+ProgressBarCard — computed from startDate/endDate config, linear/circular styles
+StreakCard — queries ModuleValues for sourceModuleId, counts consecutive completed days
+TextNoteCard — free-text input with character limit and prompt
+MandatorySessionCard — shows session status with play button
+Build the Countdown Detail screen — [id].tsx. Full-screen display: large centered count, target date, progress bar, stats, edit button, share button
+Wire Homescreen to real data — Zone 1: live modules from moduleSpecs where isLive=true and placement includes homescreen. Zone 2: auto-generated TodaySnapshot from active DayPlan. Zone 3: logged modules pinned to homescreen.
+Implement HomescreenLayout table — persist pin order and zone assignment per module
+Add the "Day X of Y" display — Wherever a date from an active plan is shown, include the plan day number (e.g. "Day 14 of 136")
+Done gate: Homescreen shows live countdown ticking, pinned modules with real data, Module Manager can create/edit/archive modules.
+
+Phase 5 — Cloud Sync & Desktop App (4–5 days)
+Why: Cross-device sync and the desktop companion app.
+
+Install Firebase — firebase package in core, configure in config.ts with real project keys via .env files
+Build Firebase Auth in packages/core/src/firebase/auth.ts — Anonymous sign-in on first launch, optional Google account linking, persist UID
+Build SyncService in packages/core/src/firebase/sync.ts — pushToFirestore() with offline queue fallback, listenForRemoteChanges() with device ID filtering to avoid echo
+Sync timer state — Push timer state changes to Firestore, listen for remote changes, update local Zustand store
+Sync module values & day plans — Two-way sync with conflict resolution (last-write-wins with timestamp comparison)
+Build the desktop UI — In src: mirror mobile screens using React web components (div/CSS instead of View/StyleSheet). Import all logic from @flowstate/core.
+Install better-sqlite3, drizzle-orm, zustand, firebase, lucide-react, recharts
+Build pages: Home, Today, Plan, Day, Session, Module Manager
+Fix Electron shell — Update main.js: fix missing preload.js and icon.png references, add proper system tray with live timer tooltip
+Compact window mode — BrowserWindow with alwaysOnTop: true, small size (400x100), toggle via Ctrl+Shift+T. Shows only timer display.
+Done gate: Pause timer on phone → pauses on desktop. Import CSV on desktop → appears on phone. System tray shows live countdown.
+
+Phase 6 — Analytics & Weekly Narrative (3–4 days)
+Why: The data is being collected — now surface insights.
+
+Build analytics queries in packages/core/src/db/analytics.ts:
+Module compliance rates (checkbox % over date range)
+Rating averages and trends
+Data input sums, averages, vs target
+Session completion rates
+Streak calculations (current + best)
+Build the Week summary view — Weekly aggregate cards: total sessions completed, module compliance bar charts, weekly narrative text
+Build the Plan progress view — Plan-level stats: "47 of 136 days completed", overall module trends, completion heatmap
+Install charting libraries — victory-native for mobile, recharts for desktop
+Build chart components — Trend lines for ratings, bar charts for data input vs target, heatmap calendar for streaks
+Weekly narrative generation — Simple template-based text: "You completed 5 of 7 sessions this week. Your focus rating averaged 4.2, up from 3.8 last week. You took Saturday off — intentional rest is part of the plan."
+Done gate: Week and Plan views show real aggregated stats, charts render, weekly narrative generates.
+
+Phase 7 — Polish & Creative Features (3–4 days)
+Why: The features from the project overview Part 7 that elevate FlowState from functional to delightful.
+
+Module Groups (Part 7B) — A ModuleSpec with type=group containing child module IDs. Renders as collapsible card with summary ("3 of 4 done")
+Intention field (Part 7C) — Add config.intention (max 140 chars) to countdown creation flow. Display as italic text on Countdown Detail screen.
+"Last Seen" countup (Part 7D) — Countup variant with config.resetOnModuleId. Auto-resets to 0 when the referenced module is logged.
+Quiet Days (Part 7F) — DayPlan.status = 'quiet' renders differently in Week view (muted color, not grey/red). Weekly narrative acknowledges them positively. CSV import supports quiet column.
+Milestone visual shift (Part 7G) — When a countdown/streak is within 10% of a milestone, the card border gets an animated gradient accent
+Animations — Install react-native-reanimated. Add: checkbox tick animation, timer ring fill animation, card entrance animations, progress bar fill transitions
+Settings screen — app/settings.tsx: theme toggle, notification preferences, Firebase account linking, data export, about
+Haptic feedback audit — Ensure all interactive elements (checkboxes, ratings, timer controls, navigation) have appropriate haptic patterns
+Done gate: All creative features functional, animations smooth, settings screen complete.
+
+Phase 8 — Testing, Build & Deployment (2–3 days)
+Why: Ship a real APK and desktop installer.
+
+Error handling audit — Add try/catch to all database operations, Firebase calls, CSV parsing. Show user-friendly error messages via toast/snackbar.
+Edge case testing — Midnight rollover (day changes while app is open), timezone changes, empty plan state, no internet sync, corrupted CSV files, very long plans (365+ days)
+Performance audit — Profile FlatList rendering on Plan screen with 136+ days. Ensure timer setInterval doesn't leak. Check SQLite query performance with large datasets.
+Build Android APK — Configure EAS Build (eas.json), run eas build --platform android --profile preview. Test the standalone APK on physical device (not Expo Go).
+Build desktop installer — Run electron-builder to produce Windows .exe installer. Test system tray, compact mode, file associations.
+Android home screen widget (Part 7E) — If time permits: a 4x2 widget showing active countdown, today's title/day number, and module completion dots. Requires native module work.
+Documentation — Update README.md with setup instructions, architecture overview, and contribution guide
+Done gate: APK installs and runs on Android without Expo Go. Desktop app installs on Windows. All features work end-to-end.
+
+Verification
+At each phase gate:
+
+All screens navigable without crashes
+npx expo start --clear launches without Metro errors
+Module values persist across app restart (Phase 2+)
+CSV import produces correct Day/Week views (Phase 3+)
+Timer survives backgrounding and process kill (Phase 2+)
+Cross-device sync within 2 seconds (Phase 5+)
+Run npx tsc --noEmit in each package to verify type safety
+Decisions
+8 phases instead of 5: The build guide's 5 phases cover core functionality. Phases 6–8 add analytics, polish features from the project overview Part 7, and deployment — necessary for a complete app.
+Phase 0 added: Current Metro error and Phase 1 gaps need fixing before proceeding.
+Desktop deferred to Phase 5: Desktop gets its own UI build after mobile is feature-complete, sharing all logic via @flowstate/core.
+lucide-react-native not adopted: The codebase already uses @expo/vector-icons (Feather) throughout. The Metro error is from a stale cache, not a missing migration. Stick with Feather icons unless there's a specific reason to switch.

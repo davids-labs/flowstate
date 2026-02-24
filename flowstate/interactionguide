@@ -1,0 +1,168 @@
+FlowState Style Lookbook + Interaction Guide (v1)
+FlowState
+Style Lookbook + Interaction Guide (v1 — regenerated)
+Notion/Linear-level organization with iOS polish. Feature-rich, fast, and non-overwhelming.
+Generated: February 23, 2026
+Constitution (inputs)
+This guide fuses your Product DNA answers with the two docs you uploaded:
+• FlowState v4: hierarchy + generic module engine + sessions-first workflow.
+• React Build Guide: build pipeline + phased implementation to avoid scope creep.
+Doc highlights (auto-extracted headings)
+FlowState\_v4.docx:
+• 1A. Homescreen → Plan → Week → Day → Session
+• 1B. Navigation Model
+• 1C. What Each Level Owns
+• 2A. Why Generic Modules
+• 2B. The Module Spec — The Core Data Structure
+• 2C. The Module Type Enum
+• 2D. Config Objects by Type
+• 2E. The Three Creative Module Types
+• 3A. What the Homescreen Is
+• 3B. The Homescreen Layout
+FlowState\_ReactBuildGuide.docx:
+• 1.1 TypeScript — The Language
+• 1.2 Expo — Your Mobile Development Platform
+• 1.3 Electron — Your Desktop App
+• 1.4 Firebase — Cloud Sync (same as v2-v4 spec)
+• 1.5 SQLite — Local Database
+• 1.6 Zustand — State Management
+• 1.7 Full Package List
+• 2.1 Install Node.js
+• 2.2 Install VS Code + Extensions
+• 2.3 Install the Expo CLI
+David Afolabi - Internal spec
+Page 1
+FlowState Style Lookbook + Interaction Guide (v1)
+Product DNA
+Clarity, momentum, control, discipline — without fake rewards.
+• Core job: keep motivation high without overwhelm; break
+years/months/weeks/sessions into quest-like chunks (rewards come from real life).
+• Enemies: procrastination and forgetfulness.
+• Identity: tool-first (silent + clinical), not a coach.
+• Anti-goals: slow UI, noisy gamification, retro/futuristic skins, AI auto-suggestion creep.
+Design thesis
+FlowState should look like a serious work instrument: dense but readable information, a
+single accent color, expandable cards, pinning, and a global Now bar that always tells you
+what you are doing.
+David Afolabi - Internal spec
+Page 2
+FlowState Style Lookbook + Interaction Guide (v1)
+Visual system
+Aesthetic direction: Notion/Linear with iOS polish
+Color strategy
+• Neutral-first surfaces: grayscale hierarchy, avoid rainbow dashboards.
+• Single accent: accent only for primary actions, selection, and progress.
+• State via tone: prefer muted vs strong text before introducing semantic colors.
+Implementation palette (tokens)
+Token
+Purpose
+INK
+TEXT
+Headings + primary text
+Body text
+Value
+#0B0F14
+#1E2630
+MUTED
+BORDER
+Secondary text + meta
+Dividers + strokes
+#667085
+#E4E7EC
+BG
+ACCENT
+Background surface
+Primary action + focus
+#F8FAFC
+#2563EB
+Typography rules
+• Hierarchy is strict: strong headings, restrained body, muted metadata.
+• Numbers get weight: timers, streak counts, and charts should be scan-friendly.
+• No novelty fonts: use system fonts or SF/Inter equivalents.
+David Afolabi - Internal spec
+Page 3
+FlowState Style Lookbook + Interaction Guide (v1)
+Layout + interaction rules
+Hybrid density: compact lists + expandable cards + pinning
+Locked navigation
+Homescreen -> Plan -> Week -> Day -> Session
+Bottom tabs (v1):
+• Home: Now bar + 1-tap Start Planned Session + pinned essentials.
+• Today: fastest logging view; modules + completed strip.
+• Plan: your planning surface (week/day selection, session templates).
+Completion + Undo law
+• Completion collapses: completed items move into a compact Completed strip (count +
+expand).
+• Undo-first: show Undo toasts broadly; prompts only for destructive deletes/wipes.
+Motion + haptics
+• Animations: minimal but graceful (150–220 ms); avoid bouncy motion.
+• Haptics: subtle; light tick on complete, medium pulse on timer end, gentle warning on
+streak risk.
+Haptic map (recommended)
+Event
+Haptic
+Notes
+Module complete
+Undo
+Light
+Light
+Fast confirmation
+Confirm reversal
+Timer end
+Session completed
+Medium
+Medium
+Distinct but not jarring
+Signal closure (not confetti)
+Irreversible action
+David Afolabi - Internal spec
+Medium + prompt Use both only when needed
+Page 4
+FlowState Style Lookbook + Interaction Guide (v1)
+Module engine + Session Player
+Generic modules. Sessions are the system. No AI autopilot.
+5 basic module types (v1)
+Module
+Control
+Typical use
+Checkbox
+Yes/No
+Tap to complete
+two-choice
+habits / did-it items
+binary compliance
+Number input
+Rating
+field + save
+1–5 or 1–10
+steps, weight, minutes
+sleep, focus quality
+Timer
+start/pause/done
+work sprints, rests
+Session Player requirements (v1)
+• Primary mode: checklist with embedded timers.
+• Focus mode: optional; isolate active step but keep step list accessible.
+• Controls: pause, skip, extend, auto-extend toggle, notes, checkbox to-do list per step.
+• Keep-awake: while Session Player is on screen.
+• Now bar: global, always shows current session and step position.
+David Afolabi - Internal spec
+Page 5
+FlowState Style Lookbook + Interaction Guide (v1)
+Progress + stats (clinical)
+Streaks are awesome. Stats should be detailed, not noisy.
+Progress rules
+• Quest framing: show session/module completion like quests, but avoid XP/loot/badges.
+• Streak chips: compact, always readable; show at-risk state subtly.
+• Stats on demand: simple summary first, deeper graphs behind a tap.
+Graph priorities
+• Completion rate over time (week/month).
+• Streak history and streak lengths.
+• Key metrics: steps, weight, minutes, sessions, focused time.
+• Per-module analytics: frequency, missed days, target attainment.
+Do / Don’t
+• Do: compact lists by default, expandable cards, pinning, Undo-first, subtle
+motion/haptics.
+• Don’t: confetti, XP popups, neon skins, AI suggestions, modal spam, slow interactions.
+David Afolabi - Internal spec
+Page 6

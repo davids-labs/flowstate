@@ -1,0 +1,404 @@
+/* ─── FlowState Desktop — Design Tokens ─── */
+:root {
+  --ink: #0B0F14;
+  --text: #1E2630;
+  --muted: #667085;
+  --border: #E4E7EC;
+  --bg: #F8FAFC;
+  --surface: #FFFFFF;
+  --accent: #2563EB;
+  --accent-light: #DBEAFE;
+  --success: #16A34A;
+  --warning: #D97706;
+  --danger: #DC2626;
+
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+
+  --sidebar-width: 220px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ─── Layout ─── */
+.app-layout {
+  display: flex;
+  height: 100vh;
+}
+
+.sidebar {
+  width: var(--sidebar-width);
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 16px 12px;
+  flex-shrink: 0;
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  margin-bottom: 24px;
+}
+
+.brand-icon {
+  font-size: 24px;
+}
+
+.brand-text {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.nav-links {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 150ms ease;
+}
+
+.nav-link:hover {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.nav-link.active {
+  background: var(--accent-light);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.sidebar-footer {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+/* ─── Main Content ─── */
+.main-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 32px;
+  max-width: 900px;
+}
+
+/* ─── Shared Components ─── */
+.page-title {
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--ink);
+  margin-bottom: 4px;
+}
+
+.page-subtitle {
+  font-size: 14px;
+  color: var(--muted);
+  margin-bottom: 24px;
+}
+
+.section-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 12px;
+  margin-top: 24px;
+}
+
+.card {
+  background: var(--surface);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+}
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.card-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  transition: background 150ms ease;
+}
+
+.card-row:hover {
+  background: var(--bg);
+}
+
+/* ─── Countdown Card ─── */
+.countdown-card {
+  text-align: center;
+  padding: 24px 16px;
+}
+
+.countdown-count {
+  font-size: 48px;
+  font-weight: 800;
+  color: var(--accent);
+  line-height: 1;
+}
+
+.countdown-label {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.countdown-unit {
+  font-size: 14px;
+  color: var(--text);
+  margin-top: 4px;
+}
+
+/* ─── Progress Bar ─── */
+.progress-track {
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 8px;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 200ms ease;
+}
+
+/* ─── Buttons ─── */
+.btn-primary {
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 10px 20px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 150ms;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-primary:hover {
+  opacity: 0.9;
+}
+
+.btn-secondary {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 10px 20px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ─── Day Row ─── */
+.day-row {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  gap: 16px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: background 150ms;
+}
+
+.day-row:hover {
+  background: var(--bg);
+}
+
+.day-date {
+  width: 44px;
+  text-align: center;
+}
+
+.day-date-label {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.day-date-num {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.day-info {
+  flex: 1;
+}
+
+.day-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.day-meta {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+/* ─── Session Card ─── */
+.session-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.session-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.session-meta {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.session-status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.status-pending {
+  background: var(--accent-light);
+  color: var(--accent);
+}
+
+.status-completed {
+  background: #DCFCE7;
+  color: var(--success);
+}
+
+/* ─── Module Row ─── */
+.module-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+}
+
+.module-emoji {
+  font-size: 24px;
+}
+
+.module-info {
+  flex: 1;
+}
+
+.module-label {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.module-type {
+  display: inline-block;
+  background: var(--accent-light);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  margin-top: 4px;
+}
+
+/* ─── Checkbox ─── */
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+}
+
+.checkbox-box {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--muted);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.checkbox-box.checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.checkbox-label {
+  font-size: 15px;
+  color: var(--text);
+}
+
+/* ─── Empty State ─── */
+.empty-state {
+  text-align: center;
+  padding: 48px 16px;
+  color: var(--muted);
+}
+
+.empty-state h3 {
+  margin-top: 12px;
+  font-size: 18px;
+  color: var(--text);
+}
+
+.empty-state p {
+  font-size: 14px;
+  margin-top: 4px;
+}

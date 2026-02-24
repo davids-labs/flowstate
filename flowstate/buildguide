@@ -1,0 +1,745 @@
+
+FlowState
+React Build Guide — Start to Finish
+Expo · TypeScript · Firebase · Electron · VS Code + GitHub Copilot
+Language	Mobile	Desktop	Database	Sync	IDE
+TypeScript	Expo (React Native)	Electron + React	SQLite (expo-sqlite)	Firebase Firestore	VS Code + Copilot
+
+Why this stack (and not Flutter)
+You said React. This is the right call. TypeScript + React Native via Expo is the most Copilot-friendly mobile stack that exists — Copilot was trained on vastly more React code than Dart/Flutter, so autocomplete quality is dramatically better. You write one language (TypeScript) across mobile, desktop, and any future web surface. The Expo toolchain is the easiest mobile dev experience available: you scan a QR code and your phone runs the app live. No cables, no emulator setup required to get started.
+
+ 
+SECTION 1 — The Stack, Explained
+
+1.1 TypeScript — The Language
+TypeScript is JavaScript with types. If you've never written either, think of it as a language that looks like this:
+
+const daysUntil = (targetDate: Date): number => {
+  const now = new Date();
+  const diff = targetDate.getTime() - now.getTime();
+  return Math.floor(diff / (1000 * 60 * 60 * 24));
+};
+
+•	Types catch mistakes before you run anything. If you try to pass a string where a number is expected, your editor underlines it in red immediately.
+•	Copilot is exceptionally good at TypeScript. Because types tell Copilot exactly what shape data is, its suggestions are far more accurate than in plain JavaScript.
+•	Every file ends in .ts (logic) or .tsx (logic that also renders UI components). You will mostly write .tsx files.
+
+1.2 Expo — Your Mobile Development Platform
+Expo is a toolkit built on top of React Native that handles the painful parts of mobile development for you. React Native lets you write JavaScript that renders as native Android and iOS UI. Expo wraps React Native and adds:
+
+•	Expo Go — a free app you install on your Android phone. You open it, scan a QR code from your terminal, and your app is running on your phone. No USB cable. No Android Studio setup for testing. Live reload every time you save a file.
+•	The Expo SDK — a library of pre-built native modules: camera, file system, SQLite, notifications, sensors, haptics. You import them like any npm package. No native code required.
+•	EAS Build — Expo's cloud build service. When you want to produce a real .apk file to install on your phone (not just via Expo Go), EAS builds it in the cloud. Free tier available.
+
+Expo Go vs standalone APK
+While developing, you use Expo Go on your phone — it's instant and requires no build step. When you want to test the full app with all features (background tasks, notifications, system tray), you build a standalone APK. You do this once per major milestone, not constantly. For the first two weeks, Expo Go is all you need.
+
+1.3 Electron — Your Desktop App
+Electron packages a web app (HTML + CSS + JavaScript) into a standalone desktop application. The same app that runs in a browser runs in a window on your computer with access to the file system, system tray, and OS notifications. Discord, VS Code, Slack, and Notion are all Electron apps.
+
+Here is the key insight for FlowState: you will build the desktop app as a React web app first (it runs in your browser for development), and then Electron wraps it to make it a real desktop app. The desktop app shares almost all its business logic with the mobile app via a shared package. You maintain one set of database functions, one Firebase sync layer, one set of module types — and the UI components are the only thing that differs between mobile (React Native) and desktop (React web).
+
+The monorepo structure
+The cleanest way to share code between Expo and Electron is a monorepo: one repository with multiple packages. You'll have: packages/core (shared TypeScript logic — timer engine, CSV parser, module specs, Firebase sync), apps/mobile (Expo React Native app), and apps/desktop (React + Electron app). Both apps import from packages/core. This is the architecture used by every serious cross-platform product.
+
+1.4 Firebase — Cloud Sync (same as v2-v4 spec)
+•	Firebase Auth: anonymous sign-in on first launch, optional Google account linking later
+•	Firebase Firestore: real-time cloud database. When you pause a timer on your phone, the desktop app receives the update in under a second.
+•	Firestore offline persistence: built into the Firebase SDK. Your data is cached locally. The app works with no internet.
+•	Free Spark plan: 50,000 reads and 20,000 writes per day. More than enough for personal use.
+
+1.5 SQLite — Local Database
+•	expo-sqlite: SQLite database on the phone. A file stored on device. The source of truth for all your data when offline.
+•	better-sqlite3: the same SQLite but for the Electron desktop app. Identical SQL queries, different package.
+•	Drizzle ORM: a TypeScript ORM that works with both expo-sqlite and better-sqlite3. You write your schema once in TypeScript, Drizzle generates the SQL, and you get typed query results. This is the equivalent of Drift from the Flutter guide.
+
+1.6 Zustand — State Management
+Zustand is a tiny state management library for React. Where Redux is a complex ceremony, Zustand is just a store object with a set function. The timer state, the current day plan, the active module values — all of these live in Zustand stores that any component can read or update.
+
+// Example Zustand store
+const useTimerStore = create<TimerState>((set) => ({
+  phase: 'idle',
+  startedAt: null,
+  blockIndex: 0,
+  play: (routineId) => set({ phase: 'running', startedAt: Date.now(), routineId }),
+  pause: () => set((s) => ({ phase: 'paused', pausedAt: Date.now() })),
+}));
+
+Copilot is excellent at generating Zustand stores. Once you write the first one, it will autocomplete the rest of your stores almost perfectly.
+
+1.7 Full Package List
+Package	What it does	Used in
+expo	The mobile development platform and SDK	Mobile
+expo-router	File-based navigation for Expo (like Next.js for mobile)	Mobile
+expo-sqlite	SQLite database on device	Mobile
+expo-file-system	Read/write files (for CSV import)	Mobile
+expo-document-picker	Let user pick a .csv file	Mobile
+expo-haptics	Haptic feedback patterns	Mobile
+expo-notifications	Local notifications + timer notification	Mobile
+expo-task-manager	Background tasks for timer and sync	Mobile
+react-native-reanimated	Smooth animations (timer ring, progress bars)	Mobile
+electron	Desktop app wrapper	Desktop
+electron-builder	Package desktop app into installer	Desktop
+better-sqlite3	SQLite for Electron desktop	Desktop
+drizzle-orm	TypeScript ORM for SQLite (shared schema)	Both
+drizzle-kit	CLI to generate and run migrations	Both
+firebase	Firebase SDK (Auth + Firestore)	Both
+zustand	State management	Both
+react-query	Server state, caching, and sync status	Both
+csv-parse	Parse CSV files	Both (shared core)
+date-fns	Date formatting and arithmetic	Both
+react-hook-form	Form handling (module config, routine builder)	Both
+zod	Schema validation (CSV validation, module config)	Both
+lucide-react / lucide-react-native	Icon library	Both
+victory-native	Charts for analytics	Mobile
+recharts	Charts for analytics	Desktop
+
+ 
+SECTION 2 — Setting Up Your Machine
+
+Do every step in order. The whole setup takes about 45 minutes the first time.
+
+2.1 Install Node.js
+Node.js is the runtime that everything in this stack runs on. npm (Node Package Manager) comes bundled with it and is how you install all packages.
+
+1	Go to nodejs.org
+Download the LTS version (the left button, labelled 'LTS'). Install it. Accept all defaults.
+
+2	Verify the install
+Open a terminal (Command Prompt on Windows, Terminal on macOS) and run: node --version. You should see something like v20.x.x. Then run: npm --version. You should see 10.x.x or similar.
+
+2.2 Install VS Code + Extensions
+1	Download VS Code
+Go to code.visualstudio.com. Download and install. Open it.
+
+2	Install GitHub Copilot
+Click the Extensions icon in the left sidebar (four squares icon). Search 'GitHub Copilot'. Install it. Then search 'GitHub Copilot Chat' and install that too. Sign in with your GitHub account when prompted. Copilot requires a GitHub account — students get it free via GitHub Education.
+
+3	Install these extensions
+Search and install each: ESLint (code quality), Prettier (auto-formatting), TypeScript Importer (auto-imports), React Native Tools (debugging), Expo Tools (Expo integration).
+
+4	Configure auto-save
+Go to File > Preferences > Settings. Search 'auto save'. Set it to 'onFocusChange'. This means files save automatically when you click away, which triggers Expo's live reload instantly.
+
+2.3 Install the Expo CLI
+1	Run this in your terminal
+npm install -g expo-cli  The -g flag installs it globally, meaning you can run 'expo' from any folder.
+
+2	Install Expo Go on your phone
+Open the Google Play Store on your Android phone. Search 'Expo Go'. Install it. Sign in with or create an Expo account (free).
+
+2.4 Create Your Firebase Project
+1	Go to Firebase Console
+console.firebase.google.com. Sign in with Google. Click 'Add Project'. Name it 'flowstate'. Disable Google Analytics (not needed). Create.
+
+2	Set up Firestore
+In the left sidebar: Firestore Database > Create Database > Start in Test Mode > select a region close to you > Enable.
+
+3	Set up Authentication
+In the left sidebar: Authentication > Get Started > Sign-in method tab > Anonymous > Enable > Save.
+
+4	Get your config keys
+In Project Settings (gear icon) > Your apps > Add app > Web app (</> icon). Register the app with any nickname. Copy the firebaseConfig object that appears — you'll paste this into your project later.
+
+2.5 Install Git (if not already installed)
+1	Check if Git is installed
+In your terminal: git --version. If you see a version number, skip this step.
+
+2	If not installed
+Windows: download from git-scm.com. macOS: run 'xcode-select --install' in terminal. Install with all defaults.
+
+3	Create a GitHub account
+Go to github.com if you don't have one. You need this for Copilot and for version control.
+
+ 
+SECTION 3 — Creating the Project
+
+This section creates the actual FlowState project on your computer. Run every command exactly as written.
+
+3.1 Create the Monorepo
+Open your terminal. Navigate to where you keep your projects (e.g. cd ~/Documents or cd C:\Projects). Then run:
+
+npx create-turbo@latest flowstate
+
+Turbo is a monorepo tool from Vercel. When prompted:
+•	Which package manager: npm
+•	It will create a flowstate/ folder with a packages/ and apps/ directory
+
+cd flowstate
+code .
+
+VS Code opens with the whole monorepo. You'll see the file tree on the left.
+
+3.2 Clean Up the Template
+Turbo creates some example apps you don't need. Delete everything in apps/ and packages/ except the turbo.json and package.json at the root. Your folder should look like:
+
+flowstate/
+  apps/          (empty)
+  packages/      (empty)
+  package.json
+  turbo.json
+
+3.3 Create the Mobile App (Expo)
+cd apps
+npx create-expo-app mobile --template blank-typescript
+cd ..
+
+This creates apps/mobile/ with a fresh Expo app in TypeScript. To test it immediately:
+cd apps/mobile
+npx expo start
+
+A QR code appears in your terminal. Open Expo Go on your phone and scan it. You should see a white screen with 'Open up App.tsx to start working on your app!'. That's your app running live on your phone. Every time you save a file in VS Code, the phone updates instantly.
+
+Keep this terminal running
+The 'npx expo start' process is your development server. Keep it running in one terminal tab while you code. Open a second terminal tab for running other commands.
+
+3.4 Create the Desktop App (Electron + React)
+cd apps
+npm create vite@latest desktop -- --template react-ts
+cd desktop
+npm install
+
+This creates apps/desktop/ with a React + TypeScript + Vite app. Vite is a fast development server for web apps. Then add Electron:
+
+npm install electron electron-builder --save-dev
+npm install concurrently --save-dev
+
+Create a file at apps/desktop/electron/main.js with this content (Copilot will fill this in — just type the comment and let it autocomplete):
+
+GitHub Copilot prompt:
+“Create an Electron main process file that opens a browser window loading the Vite dev server on localhost:5173 in development, and the built index.html in production. Add system tray support with a context menu.”
+
+3.5 Create the Shared Core Package
+cd packages
+mkdir core && cd core
+npm init -y
+
+Edit the generated package.json to add: "name": "@flowstate/core", "main": "src/index.ts". Then create the folder structure:
+
+packages/core/src/
+  index.ts          ← exports everything
+  timer/            ← timer engine
+  modules/          ← module spec types
+  csv/              ← CSV parser
+  firebase/         ← sync logic
+  db/               ← Drizzle schema (shared between mobile + desktop)
+  types/            ← shared TypeScript interfaces
+
+3.6 Connect the Packages
+In apps/mobile/package.json and apps/desktop/package.json, add to dependencies:
+"@flowstate/core": "*"
+
+Then from the root:
+npm install
+
+Turbo links the packages together. You can now import from '@flowstate/core' in both apps:
+import { TimerEngine } from '@flowstate/core';
+
+3.7 Set Up Firebase in the Core Package
+In packages/core/src/firebase/, create a config.ts file:
+
+// packages/core/src/firebase/config.ts
+import { initializeApp } from 'firebase/app';
+import { getFirestore } from 'firebase/firestore';
+import { getAuth } from 'firebase/auth';
+
+const firebaseConfig = {
+  apiKey: 'YOUR_API_KEY',          // paste from Firebase console
+  authDomain: 'YOUR_AUTH_DOMAIN',
+  projectId: 'YOUR_PROJECT_ID',
+  // ... rest of config
+};
+
+export const app = initializeApp(firebaseConfig);
+export const db = getFirestore(app);
+export const auth = getAuth(app);
+
+Never commit your Firebase keys to GitHub
+Create a .env file at the root of each app and put keys there. Add .env to your .gitignore file. Reference them as process.env.FIREBASE_API_KEY in code. Copilot will remind you of this if you ask: 'How should I handle environment variables securely in this project?'
+
+ 
+SECTION 4 — Full Project Structure
+
+Here is the complete folder structure of FlowState once it's fully built. Understand this layout before writing any feature code.
+
+flowstate/                          ← monorepo root
+  ├─ apps/
+  │   ├─ mobile/                      ← Expo React Native app
+  │   │   ├─ app/                     ← expo-router screens (file-based routing)
+  │   │   │   ├─ (tabs)/              ← bottom tab navigator
+  │   │   │   │   ├─ index.tsx        ← Homescreen tab
+  │   │   │   │   ├─ today.tsx        ← Today (Day Dashboard) tab
+  │   │   │   │   └─ plan.tsx         ← Plan tab
+  │   │   │   ├─ day/[date].tsx       ← Day detail screen
+  │   │   │   ├─ session/[id].tsx     ← Routine Player (timer)
+  │   │   │   ├─ week/[weekId].tsx    ← Week view
+  │   │   │   └─ settings.tsx         ← Settings
+  │   │   ├─ components/              ← mobile-specific UI components
+  │   │   │   ├─ modules/             ← ModuleCard, CheckboxCard, etc.
+  │   │   │   ├─ timer/               ← TimerRing, BlockChip, etc.
+  │   │   │   └─ layout/              ← Screen wrappers, headers
+  │   │   ├─ hooks/                   ← mobile-specific React hooks
+  │   │   └─ app.json                 ← Expo config
+  │   └─ desktop/                     ← React + Electron app
+  │       ├─ electron/
+  │       │   └─ main.js              ← Electron main process
+  │       ├─ src/
+  │           ├─ pages/               ← React pages (mirror of mobile screens)
+  │           ├─ components/          ← desktop-specific UI components
+  │           └─ main.tsx             ← React entry point
+  ├─ packages/
+  │   └─ core/                        ← ALL shared logic — never touches UI
+  │       ├─ src/
+  │           ├─ timer/
+  │           │   ├─ TimerEngine.ts   ← timestamp-based timer logic
+  │           │   └─ TimerState.ts    ← timer state types
+  │           ├─ modules/
+  │           │   ├─ ModuleSpec.ts    ← the ModuleSpec type and enum
+  │           │   └─ moduleLibrary.ts ← built-in module definitions
+  │           ├─ csv/
+  │           │   ├─ parser.ts        ← CSV → ParsedPlan
+  │           │   └─ validator.ts     ← validation rules + error types
+  │           ├─ db/
+  │           │   ├─ schema.ts        ← Drizzle schema (all tables)
+  │           │   └─ queries.ts       ← typed query functions
+  │           ├─ firebase/
+  │           │   ├─ config.ts        ← Firebase init
+  │           │   ├─ sync.ts          ← push/pull Firestore
+  │           │   └─ auth.ts          ← anonymous auth
+  │           └─ types/
+  │               ├─ DayPlan.ts       ← DayPlan, WeekPlan interfaces
+  │               ├─ Routine.ts       ← Routine, RoutineBlock interfaces
+  │               └─ Session.ts       ← Session, EventLog interfaces
+  ├─ package.json                     ← root workspaces config
+  └─ turbo.json                       ← Turbo build pipeline config
+
+ 
+SECTION 5 — The Build: Phase by Phase
+
+PHASE 1
+UI Shell — Fake Data, Real Screens	Days 1–3
+
+Goal: Every screen built with hardcoded fake data. No database. No network. No CSV. At the end of Phase 1, you can navigate the full app on your phone, see the Homescreen, tap into a day, see modules, and tap into a session card. Copilot will write 60% of this phase for you if you learn to prompt it correctly.
+
+React Native Concepts for Phase 1
+•	In React Native, there are no HTML elements. Instead of <div> you use <View>. Instead of <p> you use <Text>. Instead of <img> you use <Image>. The mental model is identical to React, just different primitives.
+•	StyleSheet.create() defines styles in JavaScript objects instead of CSS files. { flex: 1 } is like 'height: 100%'. { flexDirection: 'row' } is like 'display: flex; flex-direction: row'.
+•	expo-router uses file-based routing: if you create app/week/[weekId].tsx, navigating to /week/2026-W08 opens that file. No router config required.
+•	Copilot tip: after typing a component name like <TimerRing, press Tab. Copilot will write the entire component. After a comment like // Step counter module with progress bar, press Enter. Copilot will write the whole component.
+
+Phase 1 Tasks
+
+1.1	Set up expo-router navigation
+Install expo-router: npx expo install expo-router. Create the app/ folder structure from the project layout above. Create placeholder screen files that just return a <View><Text>Screen Name</Text></View>.
+
+GitHub Copilot prompt:
+“Create an expo-router tab layout with three tabs: Home (house icon), Today (calendar icon), and Plan (list icon). Use a dark background with purple accent colour #6C63FF.”
+
+1.2	Build the Homescreen
+Three zones stacked in a ScrollView: LiveZone (a 2x2 grid of placeholder cards), TodaySnapshot (a card with title, must-do count, session chips, and a large button), LoggedModulesZone (a column of module cards).
+
+1.3	Build the Day Dashboard screen
+A ScrollView with: a header showing date and day title, a checklist of 3 hardcoded must-do items (each with a Pressable checkbox), a row of module cards, and 2 session cards with Play buttons.
+
+GitHub Copilot prompt:
+“Create a React Native CheckboxModule component that shows a label, an optional emoji, a checkbox that toggles on press with a haptic tick, and a streak counter beneath it. Use TypeScript with proper props interface.”
+
+1.4	Build the three module card types
+Create components/modules/: CheckboxCard.tsx, RatingCard.tsx (5 star tap interaction), DataInputCard.tsx (numeric TextInput with unit label and progress bar). Hardcode values for now, onValueChange does nothing yet.
+
+1.5	Build the Routine Player skeleton
+A full-screen View with: a circular TimerRing component in the centre (CircularProgress from react-native-circular-progress or built with SVG), the block name below it, a row of three buttons: Pause, Skip, End. Hardcode '25:00' as the display.
+
+1.6	Build the countdown module card
+A card showing a large number (the days count), the label, and a subtitle. Hardcode 136 days. No live computation yet.
+
+End of Phase 1
+You can navigate the full app on your phone. Every screen exists. Module cards show and react to taps. Nothing saves, nothing is real — but the whole structure is there and looks right.
+
+PHASE 2
+Local Storage & The Timer Engine	Days 4–7
+
+Goal: The timer counts down correctly, survives the app being backgrounded, and shows a persistent notification. Module values save and reload. Routines persist between app launches.
+
+Key Concepts for Phase 2
+•	Zustand stores hold your in-memory app state. The timer store holds phase, startedAt, blockIndex. A useEffect with setInterval reads from the store every second and triggers a re-render of the timer display.
+•	Drizzle schema: you define your tables in packages/core/src/db/schema.ts using Drizzle's schema builder. Run 'npx drizzle-kit push' to apply them to the SQLite file.
+•	expo-sqlite: use SQLiteProvider at the root of your app to provide a database connection. Use useSQLiteContext() in any component to get it. Drizzle wraps this connection.
+•	Always-visible timer notification: use expo-notifications to show a notification with the running timer text. Update it every second from a background task using expo-task-manager.
+
+Phase 2 Tasks
+
+2.1	Set up Drizzle + SQLite
+Install: npx expo install expo-sqlite drizzle-orm. Install drizzle-kit as dev dependency. Define your schema in packages/core/src/db/schema.ts: routines, routineBlocks, dayPlans, moduleSpecs, moduleValues, sessions, eventLog tables.
+
+GitHub Copilot prompt:
+“Write a Drizzle ORM schema in TypeScript for a FlowState app with tables: routines (id, name, color, createdAt), routineBlocks (id, routineId, name, durationSeconds, order), dayPlans (date primary key, title, mustDoJson, status), moduleSpecs (id, type, label, emoji, configJson, placementsJson, isLive), moduleValues (id, moduleSpecId, contextKey, valueJson, loggedAt).”
+
+2.2	Build the TimerEngine in shared core
+In packages/core/src/timer/TimerEngine.ts: a class that stores startedAt, pausedAt, totalPausedMs, blockDuration, blockIndex. The remaining getter computes time from timestamps, never a running counter. Methods: play(), pause(), resume(), skip(), end().
+
+2.3	Build the timer Zustand store
+In apps/mobile/hooks/useTimerStore.ts: a Zustand store that holds TimerState and delegates to TimerEngine. Connect the RoutinePlayer screen to this store. Add a setInterval in a useEffect that ticks every second and forces a re-render of the TimerRing.
+
+2.4	Wire module values to SQLite
+When a module card value changes (checkbox tapped, number entered, rating selected), call an insertModuleValue() or updateModuleValue() function from packages/core/src/db/queries.ts. When a screen loads, query moduleValues for today's date and initialise cards with stored values.
+
+2.5	Background timer notification
+Use expo-notifications to register and show a notification. Use expo-task-manager to define a TIMER_TICK background task. Every second while a session is running, update the notification text to show the remaining time and block name. Edit app.json to add the required notification permissions.
+
+End of Phase 2
+The timer ticks correctly on your phone. Background it, come back, it's still right. Enter values into modules — restart the app, values are still there. The app works completely offline with zero network activity.
+
+PHASE 3
+CSV Import — The Core Feature	Days 8–10
+
+Goal: Pick a .csv file from your phone's storage. See a preview of what it will import. Tap import. The Week view fills with day titles, session cards, module targets. This is the feature that makes FlowState useful.
+
+Key Concepts for Phase 3
+•	expo-document-picker: FilePickerResult = await DocumentPicker.getDocumentAsync({ type: 'text/comma-separated-values' }). Returns the file URI. Use expo-file-system to read its contents: const content = await FileSystem.readAsStringAsync(uri).
+•	csv-parse: a Node.js compatible CSV parser that works in React Native. parse(content, { columns: true, skip_empty_lines: true }) gives you an array of objects where keys are the column headers.
+•	Zod validation: define a Zod schema that matches your CSV row shape. Parse each row through it. Zod returns detailed error messages on failure — perfect for the validation preview screen.
+•	Plan-First upsert: use Drizzle's .onConflictDoUpdate() to upsert day plans — insert if new, update plan fields if existing. In the update set, exclude tracking columns (done, any logged module values).
+
+Phase 3 Tasks
+
+3.1	Build the CSV parser in shared core
+In packages/core/src/csv/parser.ts: a function that takes raw CSV string and returns ParsedPlan { days: ParsedDay[], errors: string[] }. ParsedDay has date, title, mustDo (split on ;), sessions array, moduleTargets map.
+
+GitHub Copilot prompt:
+“Write a TypeScript CSV parser for FlowState. It should parse columns: date (YYYY-MM-DD), title, must_do (semicolon-separated), session_1_routine through session_5_routine with optional _time and _label, target_ prefixed columns for module targets, require_ prefixed columns for required flags. Return a typed ParsedPlan object. Use the csv-parse library.”
+
+3.2	Build the validator
+In packages/core/src/csv/validator.ts: a function that takes ParsedPlan and a list of known routine IDs from the database, and returns ValidationResult { errors: ValidationError[], warnings: string[] }. Errors block import. Warnings show but allow import.
+
+3.3	Build the import UI flow
+Three screens in expo-router: app/import/pick.tsx (document picker button + selected file name), app/import/preview.tsx (shows row count, date range, routines found/missing, modules detected, errors and warnings list, Import and Cancel buttons), app/import/success.tsx.
+
+3.4	Build the import writer
+In packages/core/src/db/queries.ts: importPlan(days: ParsedDay[]) function. For each day: upsert the dayPlans row (plan fields only), upsert moduleValue rows for target columns, create pending session records. Never touch existing logged values.
+
+3.5	Test with a real CSV
+Generate a 14-row test CSV. Import it. Verify Week view shows titles, Day view shows must-do items and session cards, module cards show correct targets.
+
+End of Phase 3
+FlowState does its core job: you plan outside (spreadsheet, AI, Notion export), you import the plan, FlowState executes it day by day. The 136-day holiday plan is importable in 30 seconds.
+
+PHASE 4
+Countdown Modules & the Homescreen	Days 11–12
+
+Goal: The Homescreen is live. Countdown and countup modules compute and display in real time. The module manager lets you add, configure, and pin modules to the Homescreen.
+
+4.1	Build the CountdownCard component
+Reads config.targetDate and config.startDate from the ModuleSpec. Uses a useMemo to compute remaining days/hours/minutes/seconds from Date.now(). Uses a useEffect with setInterval(fn, 1000) to update the display. Shows a progress bar if showProgressBar is true in config.
+
+GitHub Copilot prompt:
+“Write a React Native CountdownCard component in TypeScript. Props: moduleSpec (ModuleSpec type), compact (boolean for homescreen vs detail view). It should compute the remaining time from the targetDate in config, update every second, show days/hours/minutes/seconds, and optionally show a LinearGradient progress bar showing elapsed vs remaining time.”
+
+4.2	Build the CountupCard component
+Same pattern but computing elapsed time since config.originDate. Supports displayMode: 'days', 'dhms', 'years_days'. Shows milestone badges when elapsed days hit a milestone value from config.
+
+4.3	Build the Module Manager screen
+A FlatList of all ModuleSpecs in the database. Each row shows the emoji, label, type badge, and a toggle for whether it's pinned to the Homescreen. A + button opens a bottom sheet: pick type → fill config fields → choose placements → save.
+
+4.4	Wire the Homescreen zones to real data
+Replace hardcoded cards with data from Zustand + SQLite. Zone 1: query moduleSpecs where isLive = true and homescreen is in placements, ordered by homescreenOrder. Zone 3: query moduleSpecs where isLive = false and homescreen is in placements.
+
+End of Phase 4
+The Homescreen is real. Your holiday countdown ticks down. Your birthday countup counts up. You can add new modules, configure them, and pin them to the Homescreen. The app is genuinely useful.
+
+PHASE 5
+Cloud Sync & the Desktop App	Days 13–16
+
+Goal: Pause the timer on your phone, watch it pause on your laptop. Import a CSV on the desktop app, it appears on your phone. The desktop app has a system tray icon with the live timer.
+
+5.1	Add Firebase Auth to shared core
+In packages/core/src/firebase/auth.ts: signInAnonymously() on first launch, store the UID in Zustand and in AsyncStorage (mobile) / localStorage (desktop). All Firestore paths are /users/{uid}/...
+
+5.2	Build the SyncService
+In packages/core/src/firebase/sync.ts: two functions. pushToFirestore(collection, docId, data): tries the write, on failure adds to a local CommandQueue table. listenForRemoteChanges(collection, docIds, onUpdate): subscribes to Firestore snapshots, filters out changes from the local device using a deviceId field, calls onUpdate with the new data.
+
+5.3	Sync timer state across devices
+The timerStore calls SyncService.pushToFirestore('timerState', 'active', timerState) on every state change. A useEffect on mount calls listenForRemoteChanges for the timerState document. When a remote change arrives, update the local Zustand store.
+
+5.4	Build the desktop app UI
+In apps/desktop/src/pages/: mirror the mobile screens using React web components (div, CSS, etc.) instead of React Native primitives. The logic — Zustand stores, Firebase sync, SQLite queries via better-sqlite3 — is all imported from @flowstate/core.
+
+GitHub Copilot prompt:
+“Create an Electron system tray implementation in Node.js that shows the current timer state (time remaining and block name) as the tray tooltip, updates every second, and has a right-click context menu with: Start Last Routine, Pinned Routine 1, Pinned Routine 2, Open App, Quit.”
+
+5.5	Compact window mode on desktop
+Use electron's BrowserWindow with alwaysOnTop: true and a small size (400x100). Add a keyboard shortcut (Ctrl+Shift+T) to toggle between full app and compact mode. The compact window shows only the TimerDisplay component.
+
+End of Phase 5
+Pause on phone → pauses on desktop. Import CSV on desktop → fills the phone's week view. System tray shows the live countdown. FlowState is fully cross-platform.
+
+ 
+SECTION 6 — Working with GitHub Copilot
+
+Copilot will write a significant portion of FlowState if you learn to work with it correctly. Here are the patterns that get the best results for this specific project.
+
+6.1 The Comment-First Pattern
+Write a detailed comment describing exactly what you want. Then press Enter and wait. Do not start typing the code yourself.
+
+// Zustand store for the timer engine.
+// Stores: phase ('idle' | 'running' | 'paused' | 'overdue'), startedAt (number | null),
+// pausedAt (number | null), totalPausedMs (number), blockIndex (number), routineId (string | null)
+// Methods: play(routineId), pause(), resume(), skip(), end()
+// The 'remaining' getter computes from timestamps, never from a running counter.
+// [press Enter here and wait for Copilot]
+
+6.2 The Interface-First Pattern
+Define your TypeScript interface first. Copilot will use it to autocomplete every function that touches that data.
+
+interface ModuleSpec {
+  id: string;
+  type: 'countdown' | 'countup' | 'checkbox' | 'rating' | 'data_input' | 'text_note';
+  label: string;
+  emoji?: string;
+  config: Record<string, unknown>;
+  placements: ('homescreen' | 'day' | 'session')[];
+  isLive: boolean;
+  required: boolean;
+}
+// [Copilot will now autocomplete functions that take ModuleSpec correctly]
+
+6.3 Use Copilot Chat for Architecture Questions
+Open Copilot Chat (Ctrl+Shift+I in VS Code). Use it for:
+
+GitHub Copilot prompt:
+“I'm building a React Native timer app. The timer needs to work correctly when the app is backgrounded and when the process is killed. Explain the timestamp-based timer pattern and show me how to implement it in TypeScript with Zustand.”
+
+GitHub Copilot prompt:
+“I have a Drizzle schema for a table called moduleValues with columns: id, moduleSpecId, contextKey, valueJson, loggedAt. Write me a TypeScript function that upserts a module value for a given date, with proper TypeScript types.”
+
+GitHub Copilot prompt:
+“I'm parsing a CSV in React Native using the csv-parse library. The CSV has columns: date, title, must_do (semicolons separate tasks), session_1_routine, target_steps. Write the TypeScript parsing function with Zod validation.”
+
+6.4 Common Copilot Completions to Expect
+You type...	Copilot completes...
+// remaining time computed from timestamps	The full getter function with Date.now() arithmetic
+interface DayPlan {	All fields based on surrounding code context
+const useTimerStore = create<	The full Zustand store boilerplate
+// CSV row validation with Zod	A complete Zod schema matching your columns
+// Firestore sync for timer state	The push and listen functions with deviceId filtering
+<ModuleCard spec={	The full ModuleCard component with switch on spec.type
+
+6.5 When Copilot Gets It Wrong
+•	It sometimes generates code for older library versions. If something doesn't work, add a comment: // Using expo-sqlite v14 API and try again.
+•	It doesn't know your specific schema. Always show it your interface definitions first before asking it to write queries.
+•	It sometimes writes React class components instead of functional. Add to your comment: // functional component, using hooks.
+•	If it writes JavaScript instead of TypeScript, add: // TypeScript, with explicit types for all parameters and return values.
+
+ 
+SECTION 7 — Key Code Patterns
+
+7.1 The Timestamp Timer (most important pattern in the app)
+// packages/core/src/timer/TimerEngine.ts
+export class TimerEngine {
+  private startedAt: number | null = null;
+  private pausedAt: number | null = null;
+  private totalPausedMs: number = 0;
+  public blockDurationMs: number = 0;
+
+  get remainingMs(): number {
+    if (!this.startedAt) return this.blockDurationMs;
+    const now = Date.now();
+    const paused = this.pausedAt ? (now - this.pausedAt) : 0;
+    const elapsed = now - this.startedAt - this.totalPausedMs - paused;
+    return Math.max(0, this.blockDurationMs - elapsed);
+  }
+
+  get isOverdue(): boolean {
+    if (!this.startedAt) return false;
+    const now = Date.now();
+    const paused = this.pausedAt ? (now - this.pausedAt) : 0;
+    const elapsed = now - this.startedAt - this.totalPausedMs - paused;
+    return elapsed > this.blockDurationMs;
+  }
+
+  play(durationMs: number) {
+    this.blockDurationMs = durationMs;
+    this.startedAt = Date.now();
+    this.pausedAt = null;
+    this.totalPausedMs = 0;
+  }
+
+  pause() {
+    this.pausedAt = Date.now();
+  }
+
+  resume() {
+    if (this.pausedAt) {
+      this.totalPausedMs += Date.now() - this.pausedAt;
+      this.pausedAt = null;
+    }
+  }
+}
+
+7.2 Countdown Component
+// apps/mobile/components/modules/CountdownCard.tsx
+export function CountdownCard({ spec }: { spec: ModuleSpec }) {
+  const [remaining, setRemaining] = useState(() => computeRemaining(spec));
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setRemaining(computeRemaining(spec));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [spec]);
+
+  const { days, hours, minutes, seconds } = remaining;
+  return (
+    <View style={styles.card}>
+      <Text style={styles.label}>{spec.emoji}  {spec.label}</Text>
+      <Text style={styles.count}>{days}d  {hours}h  {minutes}m  {seconds}s</Text>
+    </View>
+  );
+}
+
+function computeRemaining(spec: ModuleSpec) {
+  const target = new Date(spec.config.targetDate as string).getTime();
+  const diff = Math.max(0, target - Date.now());
+  return {
+    days: Math.floor(diff / 86400000),
+    hours: Math.floor((diff % 86400000) / 3600000),
+    minutes: Math.floor((diff % 3600000) / 60000),
+    seconds: Math.floor((diff % 60000) / 1000),
+  };
+}
+
+7.3 Drizzle Schema (shared between mobile and desktop)
+// packages/core/src/db/schema.ts
+import { sqliteTable, text, integer, real } from 'drizzle-orm/sqlite-core';
+
+export const dayPlans = sqliteTable('day_plans', {
+  date: text('date').primaryKey(),            // '2026-02-22'
+  weekId: text('week_id').notNull(),          // '2026-W08'
+  title: text('title'),
+  mustDoJson: text('must_do_json'),           // JSON array of strings
+  mustDoDoneJson: text('must_do_done_json'),  // JSON array of booleans
+  status: text('status').default('not_started'),
+  notes: text('notes'),
+  importVersion: integer('import_version').default(0),
+});
+
+export const moduleValues = sqliteTable('module_values', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  moduleSpecId: text('module_spec_id').notNull(),
+  contextKey: text('context_key').notNull(), // date OR session ID
+  valueJson: text('value_json'),
+  loggedAt: integer('logged_at', { mode: 'timestamp_ms' }),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }),
+});
+
+7.4 Firebase Sync with Device ID Filtering
+// packages/core/src/firebase/sync.ts
+const deviceId = generateOrLoadDeviceId(); // stored in AsyncStorage
+
+export async function pushTimerState(state: TimerState) {
+  try {
+    await setDoc(doc(db, 'users', uid, 'timerState', 'active'), {
+      ...state,
+      deviceId,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (e) {
+    await enqueueCommand({ type: 'TIMER_STATE', payload: state });
+  }
+}
+
+export function listenTimerState(onUpdate: (state: TimerState) => void) {
+  return onSnapshot(doc(db, 'users', uid, 'timerState', 'active'), (snap) => {
+    if (!snap.exists()) return;
+    const data = snap.data();
+    if (data.deviceId === deviceId) return; // ignore own writes
+    onUpdate(data as TimerState);
+  });
+}
+
+ 
+SECTION 8 — Complete Build Checklist
+
+Setup
+Task	✓
+Node.js LTS installed (node --version shows v20+)	□
+VS Code installed	□
+GitHub Copilot extension installed and signed in	□
+Expo CLI installed (npm install -g expo-cli)	□
+Expo Go installed on Android phone	□
+Firebase project created with Firestore + Auth (anonymous)	□
+Git installed, GitHub account created	□
+
+Project Creation
+Task	✓
+Turbo monorepo created (npx create-turbo@latest flowstate)	□
+apps/mobile created with create-expo-app (TypeScript template)	□
+apps/desktop created with create-vite (react-ts template)	□
+packages/core created with folder structure	□
+@flowstate/core linked in both apps' package.json	□
+Firebase config added to packages/core/src/firebase/config.ts	□
+Expo Go scan works — app running on phone	□
+
+Phase 1: UI Shell
+Task	✓
+expo-router tab layout with Home, Today, Plan tabs	□
+Homescreen with three zones (hardcoded data)	□
+Day Dashboard with checklist, modules, session cards	□
+CheckboxCard component (toggles on tap with haptic)	□
+RatingCard component (5-star tap interaction)	□
+DataInputCard component (TextInput + progress bar)	□
+Routine Player (full-screen timer display, fake countdown)	□
+All screens navigable on physical phone	□
+
+Phase 2: Local State & Timer
+Task	✓
+Drizzle schema defined in packages/core/src/db/schema.ts	□
+expo-sqlite connected and database initialized	□
+TimerEngine class built (timestamp-based, not counter-based)	□
+Zustand timer store built and connected to RoutinePlayer	□
+Timer counts down correctly, handles overdue (counts up red)	□
+Timer shows correct time after backgrounding the app	□
+Persistent timer notification shows live countdown	□
+Module values save to SQLite when changed	□
+Module values reload correctly on app restart	□
+
+Phase 3: CSV Import
+Task	✓
+CSV parser function in packages/core/src/csv/parser.ts	□
+Zod validation returning typed errors with row numbers	□
+expo-document-picker working on Android (picks .csv file)	□
+Import preview screen shows summary, warnings, errors	□
+Import writer upserts day plans without touching tracked values	□
+Plan-First re-import tested: logged values NOT overwritten	□
+Week view shows correct titles after import	□
+Day dashboard shows must-do list and session cards from CSV	□
+Tested with a real 14-day CSV	□
+
+Phase 4: Homescreen & Modules
+Task	✓
+CountdownCard updates every second from targetDate in config	□
+CountupCard updates every second from originDate in config	□
+Progress bar shows elapsed vs remaining in countdown	□
+Module Manager screen lists all modules, allows add/edit	□
+New module creation flow: pick type, fill config, choose placements	□
+Homescreen Zone 1 shows pinned live modules from database	□
+Homescreen Zone 3 shows pinned logged modules from database	□
+Today Snapshot card shows real data from active day plan	□
+
+Phase 5: Sync & Desktop
+Task	✓
+Anonymous Firebase Auth on first launch, UID stored	□
+Timer state syncs to Firestore on every state change	□
+Remote timer state received and applied in under 2 seconds	□
+Offline command queue flushes correctly on reconnect	□
+Desktop app (React + Vite) runs in browser (npm run dev)	□
+Electron wraps the desktop app (npm run electron)	□
+System tray icon shows live timer countdown	□
+Compact overlay window (400x100) with always-on-top	□
+Pause on phone → desktop shows paused within 2 seconds	□
+Firestore security rules: users can only read/write own data	□
+
+
+Your stack. Your tools. Your app.
+TypeScript + Expo + Firebase + Electron + VS Code + Copilot.
+Start with Phase 1. Ship something that runs on your phone today.

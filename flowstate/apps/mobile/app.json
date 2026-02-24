@@ -1,0 +1,63 @@
+{
+  "expo": {
+    "name": "FlowState",
+    "slug": "flowstate",
+    "version": "1.0.0",
+    "scheme": "flowstate",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-sqlite",
+      "expo-notifications",
+      "expo-document-picker",
+      "expo-file-system",
+      [
+        "react-native-android-widget",
+        {
+          "widgets": [
+            {
+              "name": "FlowStateDay",
+              "label": "FlowState — Today",
+              "minWidth": "320dp",
+              "minHeight": "120dp",
+              "targetCellWidth": 4,
+              "targetCellHeight": 2,
+              "description": "Today's plan, must-do progress & module tracking",
+              "updatePeriodMillis": 1800000
+            }
+          ]
+        }
+      ],
+      "expo-web-browser"
+    ],
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "permissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.INTERNET",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.INTERNET"
+      ],
+      "package": "com.anonymous.flowstate"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    }
+  }
+}

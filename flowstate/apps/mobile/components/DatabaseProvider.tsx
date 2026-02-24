@@ -1,0 +1,352 @@
+import React, { createContext, useContext, useEffect, useState } from 'react';
+import { Text, View, ActivityIndicator, StyleSheet, Platform, Pressable } from 'react-native';
+import * as SQLite from 'expo-sqlite';
+import { drizzle } from 'drizzle-orm/expo-sqlite';
+// NOTE: DatabaseProvider renders ABOVE ThemeProvider in the component tree,
+// so useTheme() is not available here. Static colors are used intentionally.
+import { colors } from '../constants/theme';
+
+const DB_NAME = 'flowstate.db';
+
+// ─── True singleton: survive hot-reloads, re-mounts, and Hermes GC ───
+// Store on globalThis so even if the JS module re-executes, we reuse the same handle.
+function getOrCreateSqliteDb(): ReturnType<typeof SQLite.openDatabaseSync> {
+  const g = globalThis as any;
+  // If we already have a handle, verify it's still alive
+  if (g.__flowstate_sqliteDb) {
+    try {
+      g.__flowstate_sqliteDb.execSync('SELECT 1');
+      return g.__flowstate_sqliteDb;
+    } catch {
+      // Handle is dead — fall through to re-create
+      console.warn('SQLite handle was stale, reopening...');
+      g.__flowstate_sqliteDb = null;
+      g.__flowstate_drizzleDb = null;
+    }
+  }
+  const sqliteDb = SQLite.openDatabaseSync(DB_NAME);
+  g.__flowstate_sqliteDb = sqliteDb;
+  return sqliteDb;
+}
+
+function getOrCreateDrizzleDb(sqliteDb: ReturnType<typeof SQLite.openDatabaseSync>): any {
+  const g = globalThis as any;
+  if (g.__flowstate_drizzleDb) return g.__flowstate_drizzleDb;
+  const database = drizzle(sqliteDb);
+  g.__flowstate_drizzleDb = database;
+  return database;
+}
+
+interface DatabaseContextType {
+  db: any;
+  isReady: boolean;
+}
+
+const DatabaseContext = createContext<DatabaseContextType | null>(null);
+
+export function useDatabase() {
+  const ctx = useContext(DatabaseContext);
+  if (!ctx || !ctx.db) return null;
+  return ctx.db;
+}
+
+export function useDatabaseReady(): boolean {
+  const ctx = useContext(DatabaseContext);
+  return ctx?.isReady ?? false;
+}
+
+export function useDatabaseSafe(): { db: any | null; isReady: boolean } {
+  const ctx = useContext(DatabaseContext);
+  return { db: ctx?.db ?? null, isReady: ctx?.isReady ?? false };
+}
+
+// SQL migration statements — run in order
+const MIGRATIONS = [
+  // ─── Tables ─────────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS routines (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    total_duration_minutes INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT '',
+    archived_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS routine_blocks (
+    id TEXT PRIMARY KEY,
+    routine_id TEXT NOT NULL REFERENCES routines(id),
+    name TEXT NOT NULL,
+    duration_minutes INTEGER NOT NULL,
+    type TEXT NOT NULL DEFAULT 'focus',
+    "order" INTEGER NOT NULL DEFAULT 0,
+    module_ids TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS plans (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    start_date TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    total_days INTEGER NOT NULL,
+    imported_at TEXT NOT NULL,
+    source_file TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS day_plans (
+    id TEXT PRIMARY KEY,
+    plan_id TEXT REFERENCES plans(id),
+    date TEXT NOT NULL,
+    title TEXT NOT NULL,
+    day_number INTEGER,
+    total_days INTEGER,
+    status TEXT NOT NULL DEFAULT 'planned',
+    must_do TEXT NOT NULL DEFAULT '[]',
+    must_do_done TEXT NOT NULL DEFAULT '[]',
+    module_ids TEXT NOT NULL DEFAULT '[]',
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT ''
+  )`,
+  `CREATE TABLE IF NOT EXISTS module_specs (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    label TEXT NOT NULL,
+    emoji TEXT,
+    config TEXT NOT NULL DEFAULT '{}',
+    placements TEXT NOT NULL DEFAULT '[]',
+    is_live INTEGER NOT NULL DEFAULT 0,
+    required INTEGER NOT NULL DEFAULT 0,
+    show_in_summary INTEGER DEFAULT 0,
+    archived_at TEXT,
+    created_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT ''
+  )`,
+  `CREATE TABLE IF NOT EXISTS module_values (
+    id TEXT PRIMARY KEY,
+    module_id TEXT NOT NULL REFERENCES module_specs(id),
+    date TEXT NOT NULL,
+    value TEXT NOT NULL,
+    logged_at TEXT NOT NULL,
+    session_id TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    day_plan_id TEXT NOT NULL REFERENCES day_plans(id),
+    routine_id TEXT NOT NULL REFERENCES routines(id),
+    routine_name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    scheduled_time TEXT,
+    started_at TEXT,
+    ended_at TEXT,
+    total_paused_ms INTEGER NOT NULL DEFAULT 0,
+    current_block_index INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT ''
+  )`,
+  `CREATE TABLE IF NOT EXISTS event_log (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    type TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    block_index INTEGER,
+    data TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS homescreen_layout (
+    id TEXT PRIMARY KEY,
+    module_id TEXT NOT NULL REFERENCES module_specs(id),
+    zone INTEGER NOT NULL,
+    "order" INTEGER NOT NULL DEFAULT 0,
+    width INTEGER NOT NULL DEFAULT 1
+  )`,
+  // ─── Indexes ────────────────────────────────────────────
+  `CREATE INDEX IF NOT EXISTS idx_day_plans_date ON day_plans(date)`,
+  `CREATE INDEX IF NOT EXISTS idx_module_values_date ON module_values(date)`,
+  `CREATE INDEX IF NOT EXISTS idx_module_values_module_date ON module_values(module_id, date)`,
+  `CREATE INDEX IF NOT EXISTS idx_sessions_day_plan ON sessions(day_plan_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_event_log_session ON event_log(session_id)`,
+];
+
+// Schema version — increment when adding new migrations below
+const CURRENT_SCHEMA_VERSION = 4;
+
+// Version-based migrations: each entry runs only once when upgrading from a previous version
+const VERSION_MIGRATIONS: Record<number, string[]> = {
+  // Version 2: add settings table and ensure routines.archived_at exists
+  2: [
+    `CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    )`,
+  ],
+  // Version 3: add scheduled_time column to sessions for timeline view
+  3: [
+    `ALTER TABLE sessions ADD COLUMN scheduled_time TEXT`,
+  ],
+  // Version 4: add width column to homescreen_layout for grid sizing
+  4: [
+    `ALTER TABLE homescreen_layout ADD COLUMN width INTEGER NOT NULL DEFAULT 1`,
+  ],
+};
+
+export function DatabaseProvider({ children }: { children: React.ReactNode }) {
+  const [db, setDb] = useState<any | null>(null);
+  const [isReady, setIsReady] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
+
+  const handleRetry = () => {
+    setError(null);
+    setIsReady(false);
+    setRetryCount((c) => c + 1);
+  };
+
+  useEffect(() => {
+    let mounted = true;
+
+    function initDb() {
+      // expo-sqlite is not supported on web — show unsupported message
+      if (Platform.OS === 'web') {
+        console.warn('SQLite not available on web');
+        if (mounted) setError('FlowState requires a native device. Web is not supported.');
+        return;
+      }
+
+      try {
+        // Use the singleton helper — survives hot-reloads, GC, and re-mounts.
+        // getOrCreateSqliteDb() verifies the handle is alive before reusing it.
+        const sqliteDb = getOrCreateSqliteDb();
+
+        // Enable WAL mode for better concurrent read/write performance
+        try {
+          sqliteDb.execSync('PRAGMA journal_mode = WAL;');
+        } catch (walErr) {
+          console.warn('WAL mode warning:', walErr);
+        }
+
+        // Run initial table creation migrations (synchronously)
+        for (const stmt of MIGRATIONS) {
+          try {
+            sqliteDb.execSync(stmt);
+          } catch (migrationErr) {
+            console.warn('Migration statement warning:', migrationErr);
+            // Continue — CREATE IF NOT EXISTS may warn but is harmless
+          }
+        }
+
+        // Version-based migrations for schema updates
+        try {
+          const versionResult = sqliteDb.getFirstSync('PRAGMA user_version') as any;
+          const currentVersion = versionResult?.user_version ?? 0;
+
+          if (currentVersion < CURRENT_SCHEMA_VERSION) {
+            for (let v = currentVersion + 1; v <= CURRENT_SCHEMA_VERSION; v++) {
+              const stmts = VERSION_MIGRATIONS[v];
+              if (stmts) {
+                for (const stmt of stmts) {
+                  try {
+                    sqliteDb.execSync(stmt);
+                  } catch (e) {
+                    console.warn(`Version ${v} migration warning:`, e);
+                  }
+                }
+              }
+            }
+            sqliteDb.execSync(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);
+            console.log(`Database upgraded to version ${CURRENT_SCHEMA_VERSION}`);
+          }
+        } catch (versionErr) {
+          console.warn('Version migration warning:', versionErr);
+        }
+
+        // Verify the database is actually usable
+        try {
+          sqliteDb.execSync('SELECT 1');
+        } catch (verifyErr) {
+          throw new Error('Database verification failed: ' + String(verifyErr));
+        }
+
+        // Wrap with Drizzle ORM (also cached in getOrCreateDrizzleDb)
+        const database = getOrCreateDrizzleDb(sqliteDb);
+
+        if (mounted) {
+          setDb(database as any);
+          setIsReady(true);
+        }
+      } catch (err) {
+        console.error('Database init failed:', err);
+        if (mounted) {
+          setError(err instanceof Error ? err.message : 'Database initialization failed');
+        }
+      }
+    }
+
+    initDb();
+
+    return () => {
+      mounted = false;
+    };
+  }, [retryCount]);
+
+  if (error) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.errorText}>Database Error</Text>
+        <Text style={styles.errorDetail}>{error}</Text>
+        <Pressable style={styles.retryBtn} onPress={handleRetry}>
+          <Text style={styles.retryBtnText}>Retry</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  if (!isReady) {
+    return (
+      <View style={styles.container}>
+        <ActivityIndicator size="large" color={colors.accent} />
+        <Text style={styles.loadingText}>Loading...</Text>
+      </View>
+    );
+  }
+
+  return (
+    <DatabaseContext.Provider value={{ db, isReady }}>
+      {children}
+    </DatabaseContext.Provider>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: colors.background,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loadingText: {
+    marginTop: 12,
+    color: colors.textSecondary,
+    fontSize: 14,
+  },
+  errorText: {
+    color: colors.danger,
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  errorDetail: {
+    color: colors.textSecondary,
+    fontSize: 14,
+    textAlign: 'center',
+    paddingHorizontal: 32,
+  },
+  retryBtn: {
+    marginTop: 20,
+    backgroundColor: colors.accent,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  retryBtnText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+});
