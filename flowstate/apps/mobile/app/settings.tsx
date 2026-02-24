@@ -4,6 +4,7 @@ import * as Clipboard from 'expo-clipboard';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Feather } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { GoogleSignin, isErrorWithCode, statusCodes } from '@react-native-google-signin/google-signin';
 import { ScreenWrapper } from '../components/layout/ScreenWrapper';
 import { SectionHeader } from '../components/layout/SectionHeader';
 import { syncReminderPreference } from '../services/notifications';
@@ -30,6 +31,17 @@ import { sql } from 'drizzle-orm';
 import { useSyncContext } from '../components/SyncProvider';
 import { useTheme } from '../constants/ThemeContext';
 import { fontSize, spacing, borderRadius } from '../constants/theme';
+
+// ─── Google OAuth ─────────────────────────────────────────────────────────────
+// Web client ID — used as the audience for the id_token returned by Google Sign-In.
+// This tells Google Sign-In to issue a token that Firebase Auth can validate.
+const GOOGLE_WEB_CLIENT_ID = '693723347422-akp5cv832dlhd35pqrdtag5bihh7urtm.apps.googleusercontent.com';
+
+// Configure Google Sign-In (native SDK — no browser, no redirect URI issues)
+GoogleSignin.configure({
+  webClientId: GOOGLE_WEB_CLIENT_ID,
+  offlineAccess: false,
+});
 
 interface SettingRowProps {
   icon: string;
@@ -96,43 +108,38 @@ export default function SettingsScreen() {
 
     setIsLinking(true);
     try {
-      // Dynamic import to avoid crashing when native modules aren't available
-      let AuthSession: any;
-      let WebBrowser: any;
-      try {
-        AuthSession = require('expo-auth-session');
-        WebBrowser = require('expo-web-browser');
-      } catch {
-        Alert.alert('Not Available', 'Google sign-in requires a production build. It is not available in Expo Go.');
-        setIsLinking(false);
-        return;
-      }
-      if (!AuthSession || !WebBrowser) {
-        Alert.alert('Not Available', 'Google sign-in requires a production build. It is not available in Expo Go.');
-        setIsLinking(false);
-        return;
-      }
-      WebBrowser.maybeCompleteAuthSession?.();
+      // Native Google Sign-In — uses Android's Credential Manager / account picker
+      // No browser, no redirect URI issues, no OAuth consent screen problems
+      await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+      const response = await GoogleSignin.signIn();
 
-      const discovery = await AuthSession.fetchDiscoveryAsync('https://accounts.google.com');
-      const redirectUri = AuthSession.makeRedirectUri({ scheme: 'flowstate' });
-      const request = new AuthSession.AuthRequest({
-        clientId: '693723347422-akp5cv832dlhd35pqrdtag5bihh7urtm.apps.googleusercontent.com',
-        scopes: ['openid', 'profile', 'email'],
-        redirectUri,
-        responseType: AuthSession.ResponseType.IdToken,
-      });
-      const result = await request.promptAsync(discovery);
-      if (result.type === 'success' && result.params?.id_token) {
-        await linkGoogleAccount(result.params.id_token);
-        const user = getCurrentUser();
-        const gp = user?.providerData?.find((p: any) => p.providerId === 'google.com');
-        setLinkedProvider(gp?.email ?? 'Google');
-        Alert.alert('Linked!', 'Your Google account is now linked for cross-device sync.');
+      const idToken = response.data?.idToken;
+      if (!idToken) {
+        Alert.alert('Link Failed', 'No ID token received from Google. Please try again.');
+        return;
       }
+
+      // Link the Google credential to the anonymous Firebase account
+      await linkGoogleAccount(idToken);
+      const user = getCurrentUser();
+      const gp = user?.providerData?.find((p: any) => p.providerId === 'google.com');
+      setLinkedProvider(gp?.email ?? 'Google');
+      Alert.alert('Linked!', 'Your Google account is now linked for cross-device sync.');
     } catch (err: any) {
-      if (err?.message?.includes?.('Cannot find native module')) {
-        Alert.alert('Not Available', 'Google sign-in requires a production build. It is not available in Expo Go.');
+      if (isErrorWithCode(err)) {
+        switch (err.code) {
+          case statusCodes.SIGN_IN_CANCELLED:
+            // User cancelled — do nothing
+            break;
+          case statusCodes.IN_PROGRESS:
+            Alert.alert('Please Wait', 'Sign-in is already in progress.');
+            break;
+          case statusCodes.PLAY_SERVICES_NOT_AVAILABLE:
+            Alert.alert('Not Available', 'Google Play Services is not available on this device.');
+            break;
+          default:
+            Alert.alert('Link Failed', err.message ?? 'Could not link Google account.');
+        }
       } else {
         Alert.alert('Link Failed', err.message ?? 'Could not link Google account.');
       }
