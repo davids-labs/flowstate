@@ -213,7 +213,7 @@ export default function LayoutEditor() {
       }
       await setHomescreenLayout(db, normalized);
       setHasChanges(false);
-      router.back();
+      router.canGoBack() ? router.back() : router.replace('/(tabs)');
     } catch (e) {
       Alert.alert("Error", "Could not save layout.");
     } finally {

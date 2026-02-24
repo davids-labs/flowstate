@@ -91,6 +91,35 @@ export class TimerEngine {
     });
   }
 
+  /**
+   * Restore a timer that was previously running.
+   * Resumes from the persisted startedAt / totalPausedMs / blockIndex
+   * so the timer picks up exactly where it left off.
+   * The timer is restored in a **paused** state — caller can resume().
+   */
+  restore(config: {
+    sessionId: string;
+    blocks: Array<{ durationMinutes: number }>;
+    blockIndex: number;
+    startedAt: number;
+    totalPausedMs: number;
+    pausedAt?: number | null;
+  }) {
+    const block = config.blocks[config.blockIndex];
+    if (!block) return;
+
+    this._setState({
+      phase: 'paused',
+      startedAt: config.startedAt,
+      pausedAt: config.pausedAt ?? Date.now(),
+      totalPausedMs: config.totalPausedMs,
+      blockDurationMs: block.durationMinutes * 60 * 1000,
+      blockIndex: config.blockIndex,
+      totalBlocks: config.blocks.length,
+      sessionId: config.sessionId,
+    });
+  }
+
   // ─── Controls ──────────────────────────────────────────────
 
   play() {

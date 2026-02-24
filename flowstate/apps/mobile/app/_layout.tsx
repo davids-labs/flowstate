@@ -53,12 +53,17 @@ function ThemedStack() {
         <Stack.Screen name="modules/create" options={{ title: "New Module" }} />
         <Stack.Screen name="modules/[id]" options={{ title: "Module Detail" }} />
         <Stack.Screen name="modules/edit" options={{ title: "Edit Module" }} />
+        <Stack.Screen name="modules/schedules" options={{ title: "Schedules" }} />
+        <Stack.Screen name="modules/reminders" options={{ title: "Reminders" }} />
         <Stack.Screen name="routines/index" options={{ title: "Routines" }} />
         <Stack.Screen name="routines/create" options={{ title: "New Routine" }} />
         <Stack.Screen name="settings" options={{ title: "Settings" }} />
         <Stack.Screen name="routines/[id]" options={{ title: "Edit Routine" }} />
         <Stack.Screen name="routine-launcher/[id]" options={{ title: "Routine", headerShown: false }} />
         <Stack.Screen name="layout-editor" options={{ title: "Edit Layout" }} />
+        <Stack.Screen name="statistics/index" options={{ title: "Statistics" }} />
+        <Stack.Screen name="gallery/index" options={{ title: "Gallery" }} />
+        <Stack.Screen name="backup/index" options={{ title: "Backup & Restore" }} />
       </Stack>
     </>
   );

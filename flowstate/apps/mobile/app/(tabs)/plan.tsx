@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useMemo } from 'react';
-import { View, Text, Pressable, StyleSheet, FlatList, SafeAreaView, type ListRenderItemInfo } from 'react-native';
+import { View, Text, Pressable, StyleSheet, FlatList, type ListRenderItemInfo } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { SectionHeader } from '../../components/layout/SectionHeader';

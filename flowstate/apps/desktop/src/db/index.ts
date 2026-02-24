@@ -70,7 +70,8 @@ function ensureTables(db: Database) {
     total_duration_minutes INTEGER NOT NULL,
     created_at TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL DEFAULT '',
-    archived_at TEXT
+    archived_at TEXT,
+    collection_id TEXT
   )`);
 
   db.run(`CREATE TABLE IF NOT EXISTS routine_blocks (
@@ -121,7 +122,9 @@ function ensureTables(db: Database) {
     show_in_summary INTEGER DEFAULT 0,
     archived_at TEXT,
     created_at TEXT NOT NULL DEFAULT '',
-    updated_at TEXT NOT NULL DEFAULT ''
+    updated_at TEXT NOT NULL DEFAULT '',
+    collection_id TEXT,
+    metadata TEXT NOT NULL DEFAULT '{}'
   )`);
 
   db.run(`CREATE TABLE IF NOT EXISTS module_values (
@@ -139,12 +142,16 @@ function ensureTables(db: Database) {
     routine_id TEXT NOT NULL REFERENCES routines(id),
     routine_name TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending',
+    scheduled_time TEXT,
     started_at TEXT,
     ended_at TEXT,
     total_paused_ms INTEGER NOT NULL DEFAULT 0,
     current_block_index INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT '',
-    updated_at TEXT NOT NULL DEFAULT ''
+    updated_at TEXT NOT NULL DEFAULT '',
+    module_id TEXT,
+    tags TEXT NOT NULL DEFAULT '[]',
+    photos TEXT NOT NULL DEFAULT '[]'
   )`);
 
   db.run(`CREATE TABLE IF NOT EXISTS event_log (
@@ -162,6 +169,72 @@ function ensureTables(db: Database) {
     zone INTEGER NOT NULL,
     "order" INTEGER NOT NULL DEFAULT 0
   )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS collections (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    emoji TEXT,
+    parent_id TEXT,
+    type TEXT NOT NULL DEFAULT 'module',
+    created_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT ''
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS module_goals (
+    id TEXT PRIMARY KEY,
+    module_id TEXT NOT NULL REFERENCES module_specs(id),
+    start_value REAL NOT NULL,
+    target_value REAL NOT NULL,
+    start_date TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    unit TEXT,
+    created_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT ''
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS module_schedules (
+    id TEXT PRIMARY KEY,
+    module_id TEXT NOT NULL REFERENCES module_specs(id),
+    days_of_week TEXT NOT NULL DEFAULT '[]',
+    time_of_day TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT ''
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS module_reminders (
+    id TEXT PRIMARY KEY,
+    module_id TEXT NOT NULL REFERENCES module_specs(id),
+    days_of_week TEXT NOT NULL DEFAULT '[]',
+    time TEXT NOT NULL,
+    message TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT ''
+  )`);
+
+  // ─── Version-based column additions ─────────────────────
+  // These use ALTER TABLE which will fail if column already exists,
+  // so we wrap each in a try/catch.
+  const alterations = [
+    `ALTER TABLE sessions ADD COLUMN scheduled_time TEXT`,
+    `ALTER TABLE homescreen_layout ADD COLUMN width INTEGER NOT NULL DEFAULT 1`,
+    `ALTER TABLE routines ADD COLUMN collection_id TEXT`,
+    `ALTER TABLE module_specs ADD COLUMN collection_id TEXT`,
+    `ALTER TABLE module_specs ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'`,
+    `ALTER TABLE sessions ADD COLUMN module_id TEXT`,
+    `ALTER TABLE sessions ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'`,
+    `ALTER TABLE sessions ADD COLUMN photos TEXT NOT NULL DEFAULT '[]'`,
+    `ALTER TABLE sessions ADD COLUMN notes TEXT`,
+  ];
+  for (const stmt of alterations) {
+    try { db.run(stmt); } catch { /* column already exists */ }
+  }
 }
 
 /**

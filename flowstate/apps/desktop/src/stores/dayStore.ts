@@ -31,6 +31,8 @@ interface DayStoreState {
   toggleMustDo: (db: any, index: number) => Promise<void>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   setModuleValue: (db: any, moduleId: string, value: string) => Promise<void>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  rolloverMustDos: (db: any) => Promise<void>;
 }
 
 function todayDate(): string {
@@ -88,6 +90,57 @@ export const useDayStore = create<DayStoreState>((set, get) => ({
       await queries.upsertModuleValue(db, { moduleId, date, value });
     } catch (err) {
       console.error('Failed to save module value:', err);
+    }
+  },
+
+  /**
+   * Auto-Rollover: At 04:00 AM, any unchecked "Must-Do" items
+   * are upserted into the next day's DayPlan.
+   */
+  rolloverMustDos: async (db) => {
+    try {
+      const now = new Date();
+      if (now.getHours() < 4) return;
+
+      const yesterday = new Date(now);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayStr = yesterday.toISOString().slice(0, 10);
+      const today = todayDate();
+
+      const yesterdayPlan = await queries.getDayPlan(db, yesterdayStr);
+      if (!yesterdayPlan) return;
+
+      const mustDo: string[] = (yesterdayPlan as DayPlanData).mustDo ?? [];
+      const mustDoDone: boolean[] = (yesterdayPlan as DayPlanData).mustDoDone ?? [];
+      const unchecked = mustDo.filter((_: string, i: number) => !mustDoDone[i]);
+      if (unchecked.length === 0) return;
+
+      const todayPlan = await queries.getDayPlan(db, today);
+
+      if (todayPlan) {
+        const existingMustDo: string[] = (todayPlan as DayPlanData).mustDo ?? [];
+        const existingDone: boolean[] = (todayPlan as DayPlanData).mustDoDone ?? [];
+        const newItems = unchecked.filter((item: string) => !existingMustDo.includes(item));
+        if (newItems.length === 0) return;
+
+        await queries.upsertDayPlan(db, {
+          date: today,
+          title: (todayPlan as DayPlanData).title,
+          mustDo: [...existingMustDo, ...newItems],
+          mustDoDone: [...existingDone, ...newItems.map(() => false)],
+          moduleIds: (todayPlan as DayPlanData).moduleIds,
+        });
+      } else {
+        await queries.upsertDayPlan(db, {
+          date: today,
+          title: 'Day Plan',
+          mustDo: unchecked,
+          mustDoDone: unchecked.map(() => false),
+          moduleIds: [],
+        });
+      }
+    } catch (err) {
+      console.error('Failed to rollover must-dos:', err);
     }
   },
 }));

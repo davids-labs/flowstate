@@ -6,6 +6,7 @@ import {
   StyleSheet,
   ScrollView,
   ActivityIndicator,
+  TextInput,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
@@ -13,7 +14,7 @@ import * as Haptics from "expo-haptics";
 import { fontSize, spacing, borderRadius } from "../../constants/theme";
 import { useTheme } from "../../constants/ThemeContext";
 import { useDatabaseSafe } from "../../components/DatabaseProvider";
-import { getSession, getSessionEvents, getRoutineBlocks } from "@flowstate/core";
+import { getSession, getSessionEvents, getRoutineBlocks, updateSession } from "@flowstate/core";
 
 interface DebriefData {
   routineName: string;
@@ -30,6 +31,7 @@ export default function DebriefScreen() {
   const router = useRouter();
   const { db, isReady } = useDatabaseSafe();
   const [data, setData] = useState<DebriefData | null>(null);
+  const [notes, setNotes] = useState('');
   const { themeColors } = useTheme();
 
   useEffect(() => {
@@ -207,12 +209,34 @@ export default function DebriefScreen() {
         </>
       )}
 
+      {/* Session Notes */}
+      <Text style={[styles.sectionTitle, { color: themeColors.muted }]}>Notes</Text>
+      <TextInput
+        style={[
+          styles.notesInput,
+          { backgroundColor: themeColors.surface, color: themeColors.text, borderColor: themeColors.surfaceBorder ?? themeColors.surface },
+        ]}
+        placeholder="How did it go? Any thoughts..."
+        placeholderTextColor={themeColors.muted}
+        value={notes}
+        onChangeText={setNotes}
+        multiline
+        textAlignVertical="top"
+      />
+
       {/* Done button */}
       <Pressable
         style={[styles.doneBtn, { backgroundColor: themeColors.accent }]}
-        onPress={() => {
+        onPress={async () => {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-          // Navigate to home tabs instead of fragile dismiss(2)
+          // Save notes if user wrote any
+          if (notes.trim() && db && sessionId) {
+            try {
+              await updateSession(db, sessionId, { notes: notes.trim() });
+            } catch (e) {
+              console.warn('Failed to save notes:', e);
+            }
+          }
           router.replace('/(tabs)');
         }}
       >
@@ -334,10 +358,19 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.lg,
     paddingVertical: spacing.md,
     alignItems: "center",
+    marginTop: spacing.md,
   },
   doneBtnText: {
     fontSize: fontSize.lg,
     fontWeight: "700",
+  },
+  notesInput: {
+    borderRadius: borderRadius.md,
+    borderWidth: 1,
+    padding: spacing.md,
+    fontSize: fontSize.md,
+    minHeight: 100,
+    marginBottom: spacing.md,
   },
   loadingContainer: {
     alignItems: "center",

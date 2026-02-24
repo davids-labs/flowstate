@@ -28,11 +28,14 @@ export interface Session {
   dayPlanId: string;
   routineId: string;
   routineName: string;
+  moduleId?: string | null; // for timer-module-generated sessions
   status: SessionStatus;
   startedAt?: string; // ISO
   endedAt?: string; // ISO
   totalPausedMs: number;
   currentBlockIndex: number;
+  tags: string[]; // user-defined session tags
+  photos: string[]; // local URIs of attached photos
   events: SessionEvent[];
   createdAt?: string;
   updatedAt?: string;

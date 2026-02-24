@@ -13,6 +13,7 @@ export const MODULE_TYPES = [
   'tally',
   'photo_log',
   'routine_launcher',
+  'timer',
 ] as const;
 
 export type ModuleType = (typeof MODULE_TYPES)[number];
@@ -114,6 +115,10 @@ export interface RoutineLauncherConfig {
   accentColor?: string; // custom card tint
 }
 
+export interface TimerModuleConfig {
+  defaultDurationSeconds: number; // e.g. 1500 for 25min pomodoro
+}
+
 export type ModuleConfig =
   | CountdownConfig
   | CountupConfig
@@ -126,7 +131,8 @@ export type ModuleConfig =
   | StreakCounterConfig
   | TallyConfig
   | PhotoLogConfig
-  | RoutineLauncherConfig;
+  | RoutineLauncherConfig
+  | TimerModuleConfig;
 
 // ─── ModuleSpec ─────────────────────────────────────────────────
 
@@ -140,6 +146,8 @@ export interface ModuleSpec {
   isLive: boolean;
   required: boolean;
   showInSummary?: boolean;
+  collectionId?: string | null;
+  metadata?: Record<string, unknown>;
   archivedAt?: string | null;
   createdAt?: string;
   updatedAt?: string;

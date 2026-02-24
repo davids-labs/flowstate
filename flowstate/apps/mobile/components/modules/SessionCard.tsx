@@ -33,9 +33,7 @@ export function SessionCard({
     <Pressable
       style={[styles.card, { backgroundColor: themeColors.surface }]}
       onPress={() => {
-        if (status !== 'completed') {
-          router.push(`/session/${sessionId}`);
-        }
+        router.push(`/session/${sessionId}`);
       }}
     >
       <View style={styles.info}>

@@ -252,7 +252,7 @@ export default function RoutineLauncherScreen() {
     Alert.alert(
       '✅ Routine Complete!',
       `${routineName} finished successfully.`,
-      [{ text: 'Done', onPress: () => router.back() }],
+      [{ text: 'Done', onPress: () => router.canGoBack() ? router.back() : router.replace('/(tabs)') }],
     );
   }, [end, db, sessionId, routineName, router]);
 
@@ -270,7 +270,7 @@ export default function RoutineLauncherScreen() {
               endedAt: new Date().toISOString(),
             }).catch((e) => { console.warn('operation failed:', e); });
           }
-          router.back();
+          router.canGoBack() ? router.back() : router.replace('/(tabs)');
         },
       },
     ]);
@@ -307,7 +307,7 @@ export default function RoutineLauncherScreen() {
         <Feather name="alert-circle" size={48} color={themeColors.danger} />
         <Text style={[styles.routineTitle, { color: themeColors.text }]}>No Blocks Found</Text>
         <Text style={[styles.loadingText, { color: themeColors.muted }]}>This routine has no blocks. Edit it to add blocks.</Text>
-        <Pressable style={[styles.backBtn, { backgroundColor: themeColors.surface }]} onPress={() => router.back()}>
+        <Pressable style={[styles.backBtn, { backgroundColor: themeColors.surface }]} onPress={() => router.canGoBack() ? router.back() : router.replace('/(tabs)')}>
           <Text style={[styles.backBtnText, { color: themeColors.accent }]}>Go Back</Text>
         </Pressable>
       </View>

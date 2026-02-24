@@ -23,6 +23,7 @@ import { useModuleValue, parseNumber } from "../../hooks/useModuleValue";
 import {
   getModuleSpecs, getSessionsForDay, getRoutine, getRoutineBlocks,
   getRoutines, createSession, upsertDayPlan, updateMustDoDone, deleteSession,
+  autoFillDayPlan,
 } from "@flowstate/core";
 import { fontSize, spacing, borderRadius } from "../../constants/theme";
 import { useTheme } from "../../constants/ThemeContext";
@@ -61,7 +62,16 @@ export default function TodayScreen() {
   useFocusEffect(
     useCallback(() => {
       if (!db || !isReady) return;
-      loadDay(db, todayStr);
+      loadDay(db, todayStr).then(async () => {
+        // Auto-fill scheduled modules into today's plan
+        try {
+          const plan = useDayStore.getState().dayPlan;
+          if (plan?.id) {
+            await autoFillDayPlan(db, plan.id, todayStr);
+            await loadDay(db, todayStr);
+          }
+        } catch {}
+      });
       (async () => {
         try {
           const specs = await getModuleSpecs(db);

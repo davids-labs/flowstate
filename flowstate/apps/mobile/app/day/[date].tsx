@@ -243,7 +243,7 @@ export default function DayScreen() {
     return (
       <ScreenWrapper>
         <Text style={[styles.empty, { color: themeColors.muted }]}>No plan found for {date}</Text>
-        <Pressable style={styles.backBtn} onPress={() => router.back()}>
+        <Pressable style={styles.backBtn} onPress={() => router.canGoBack() ? router.back() : router.replace('/(tabs)')}>
           <Feather name="arrow-left" size={16} color={themeColors.accent} />
           <Text style={[styles.backBtnText, { color: themeColors.accent }]}>Go back</Text>
         </Pressable>

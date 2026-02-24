@@ -128,7 +128,7 @@ try {
   TaskManager.defineTask(TIMER_TASK, async () => {
     try {
       const raw = await AsyncStorage.getItem(TIMER_STATE_KEY);
-      if (!raw) return TaskManager.TaskManagerTaskBody ? undefined : undefined;
+      if (!raw) return;
 
       const state = JSON.parse(raw);
       if (!state.isRunning) return;
@@ -250,5 +250,94 @@ export async function syncReminderPreference(enabled: boolean) {
     await scheduleDailyReminders();
   } else {
     await cancelDailyReminders();
+  }
+}
+
+// ─── Per-Module Reminders ───────────────────────────────────────
+
+const MODULE_REMINDER_PREFIX = 'flowstate-module-reminder-';
+
+/**
+ * Schedule notifications for a single module reminder.
+ * Creates one notification per scheduled day-of-week.
+ */
+export async function scheduleModuleReminder(
+  reminderId: string,
+  moduleLabel: string,
+  moduleEmoji: string | null,
+  time: string,         // "HH:MM"
+  daysOfWeek: number[], // 0=Sun..6=Sat
+  message?: string | null,
+) {
+  const enabled = await areNotificationsEnabled();
+  if (!enabled) return;
+
+  const hasPermission = await requestNotificationPermissions();
+  if (!hasPermission) return;
+
+  // Cancel any existing notifications for this reminder
+  await cancelModuleReminder(reminderId);
+
+  const [hourStr, minStr] = time.split(':');
+  const hour = parseInt(hourStr, 10);
+  const minute = parseInt(minStr, 10);
+  const prefix = moduleEmoji ? `${moduleEmoji} ` : '';
+  const body = message || `Time to log ${moduleLabel}`;
+
+  for (const weekday of daysOfWeek) {
+    const identifier = `${MODULE_REMINDER_PREFIX}${reminderId}-${weekday}`;
+    await Notifications.scheduleNotificationAsync({
+      identifier,
+      content: {
+        title: `${prefix}${moduleLabel}`,
+        body,
+        sound: true,
+        priority: Notifications.AndroidNotificationPriority.DEFAULT,
+      },
+      trigger: {
+        type: Notifications.SchedulableTriggerInputTypes.WEEKLY,
+        weekday: weekday + 1, // expo uses 1=Sun..7=Sat
+        hour,
+        minute,
+      },
+    });
+  }
+}
+
+/**
+ * Cancel all notifications for a specific module reminder.
+ */
+export async function cancelModuleReminder(reminderId: string) {
+  // Cancel for all 7 possible weekdays
+  for (let d = 0; d < 7; d++) {
+    try {
+      await Notifications.cancelScheduledNotificationAsync(
+        `${MODULE_REMINDER_PREFIX}${reminderId}-${d}`,
+      );
+    } catch {}
+  }
+}
+
+/**
+ * Sync all module reminders from the DB.
+ * Call this on app start and whenever reminders are modified.
+ */
+export async function syncAllModuleReminders(
+  reminders: Array<{
+    id: string;
+    moduleLabel: string;
+    moduleEmoji: string | null;
+    time: string;
+    daysOfWeek: number[];
+    message: string | null;
+    enabled: boolean;
+  }>,
+) {
+  for (const r of reminders) {
+    if (r.enabled) {
+      await scheduleModuleReminder(r.id, r.moduleLabel, r.moduleEmoji, r.time, r.daysOfWeek, r.message);
+    } else {
+      await cancelModuleReminder(r.id);
+    }
   }
 }

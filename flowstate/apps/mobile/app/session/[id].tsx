@@ -1,5 +1,5 @@
-import React, { useEffect, useCallback, useState } from "react";
-import { View, Text, Pressable, StyleSheet, ActivityIndicator } from "react-native";
+import React, { useEffect, useCallback, useState, useRef } from "react";
+import { View, Text, Pressable, StyleSheet, ActivityIndicator, FlatList } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import Svg, { Circle } from "react-native-svg";
@@ -16,6 +16,7 @@ import {
   getRoutineBlocks,
   updateSession,
   createSessionEvent,
+  getSessions,
 } from "@flowstate/core";
 
 function formatTime(ms: number): string {
@@ -49,65 +50,84 @@ export default function SessionScreen() {
     routineName: string;
     blocks: SessionBlock[];
     status?: string;
+    startedAt?: string | null;
+    totalPausedMs?: number;
+    currentBlockIndex?: number;
+    dayPlanId?: string;
   } | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Load session + routine blocks from DB
-  useEffect(() => {
-    if (!db || !isReady || !id) {
+  // ── Session list for navigation ────────────────────────────────
+  const [allSessions, setAllSessions] = useState<any[]>([]);
+  const [currentSessionIndex, setCurrentSessionIndex] = useState(0);
+  const currentSessionId = allSessions[currentSessionIndex]?.id ?? id;
+
+  // ── Undo state ─────────────────────────────────────────────────
+  const [undoVisible, setUndoVisible] = useState(false);
+  const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Load all sessions for the day, and the target session
+  const loadSessionData = useCallback(async (targetId: string) => {
+    if (!db || !isReady || !targetId) {
       setLoading(false);
       return;
     }
-    (async () => {
-      try {
-        const sess = await getSession(db, id);
-        if (!sess) {
-          // Session not found — show error state instead of fake data
-          setSessionData(null);
-          setLoading(false);
-          return;
-        }
-
-        // Load routine blocks
-        let blocks: SessionBlock[] = [];
-        try {
-          const routineBlockRows = await getRoutineBlocks(db, sess.routineId);
-          if (routineBlockRows.length > 0) {
-            blocks = routineBlockRows.map((b: any) => ({
-              name: b.name,
-              durationMinutes: b.durationMinutes,
-            }));
-          }
-        } catch {}
-
-        // If no blocks defined in routine, create a default based on routine duration
-        if (blocks.length === 0) {
-          const routine = await getRoutine(db, sess.routineId);
-          const dur = routine?.totalDurationMinutes ?? 25;
-          blocks = [{ name: "Focus", durationMinutes: dur }];
-        }
-
-        setSessionData({
-          routineName: sess.routineName,
-          blocks,
-          status: sess.status,
-        });
-
-        // Log that the session screen was opened (don't change status yet)
-        await createSessionEvent(db, {
-          sessionId: id,
-          type: "session_opened",
-        });
-      } catch (e) {
-        console.error("Failed to load session:", e);
+    try {
+      const sess = await getSession(db, targetId);
+      if (!sess) {
         setSessionData(null);
-      } finally {
         setLoading(false);
+        return;
       }
-    })();
-  }, [db, isReady, id]);
 
-  // Keep screen awake only during active session (not while loading)
+      // Load all sibling sessions in this day
+      const siblings = await getSessions(db, sess.dayPlanId);
+      setAllSessions(siblings);
+      const idx = siblings.findIndex((s: any) => s.id === targetId);
+      if (idx >= 0) setCurrentSessionIndex(idx);
+
+      // Load routine blocks
+      let blocks: SessionBlock[] = [];
+      try {
+        const routineBlockRows = await getRoutineBlocks(db, sess.routineId);
+        if (routineBlockRows.length > 0) {
+          blocks = routineBlockRows.map((b: any) => ({
+            name: b.name,
+            durationMinutes: b.durationMinutes,
+          }));
+        }
+      } catch {}
+
+      if (blocks.length === 0) {
+        const routine = await getRoutine(db, sess.routineId);
+        const dur = routine?.totalDurationMinutes ?? 25;
+        blocks = [{ name: "Focus", durationMinutes: dur }];
+      }
+
+      setSessionData({
+        routineName: sess.routineName,
+        blocks,
+        status: sess.status,
+        startedAt: sess.startedAt,
+        totalPausedMs: sess.totalPausedMs ?? 0,
+        currentBlockIndex: sess.currentBlockIndex ?? 0,
+        dayPlanId: sess.dayPlanId,
+      });
+
+      await createSessionEvent(db, { sessionId: targetId, type: "session_opened" });
+    } catch (e) {
+      console.error("Failed to load session:", e);
+      setSessionData(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [db, isReady]);
+
+  useEffect(() => {
+    if (id) loadSessionData(id);
+  }, [id, loadSessionData]);
+
+  // Keep screen awake only during active session
   useEffect(() => {
     if (sessionData && sessionData.status !== 'completed') {
       activateKeepAwakeAsync();
@@ -124,7 +144,10 @@ export default function SessionScreen() {
     totalBlocks,
     isOverdue,
     currentBlockName,
+    pausedAt,
+    blockDurationMs,
     init,
+    restore,
     play,
     pause,
     resume,
@@ -132,12 +155,32 @@ export default function SessionScreen() {
     end,
   } = useTimerStore();
 
-  // Initialize timer when session data loads
+  // Initialize or restore timer when session data loads
   useEffect(() => {
-    if (sessionData) {
-      init(id ?? "session", sessionData.blocks, sessionData.routineName);
+    if (!sessionData) return;
+
+    const sid = currentSessionId ?? "session";
+
+    // If session was previously in_progress and has a startedAt,
+    // restore the timer so it picks up where it left off (paused).
+    if (
+      sessionData.status === "in_progress" &&
+      sessionData.startedAt
+    ) {
+      const startedAtMs = new Date(sessionData.startedAt).getTime();
+      if (!isNaN(startedAtMs) && startedAtMs > 0) {
+        restore(sid, sessionData.blocks, sessionData.routineName, {
+          blockIndex: sessionData.currentBlockIndex ?? 0,
+          startedAt: startedAtMs,
+          totalPausedMs: sessionData.totalPausedMs ?? 0,
+        });
+        return;
+      }
     }
-  }, [sessionData, id]);
+
+    // Otherwise fresh init (pending or completed sessions)
+    init(sid, sessionData.blocks, sessionData.routineName);
+  }, [sessionData, currentSessionId]);
 
   const session = sessionData ?? {
     routineName: "Loading...",
@@ -148,11 +191,11 @@ export default function SessionScreen() {
   const strokeDashoffset = CIRCUMFERENCE * (1 - timerProgress);
   const ringColor = isOverdue ? themeColors.danger : themeColors.accent;
 
-  // Persist timer state to DB on significant events
+  // Persist timer state to DB
   const persistTimerState = useCallback(async (status: string, extraData?: Record<string, unknown>) => {
-    if (!db || !id) return;
+    if (!db || !currentSessionId) return;
     try {
-      await updateSession(db, id, {
+      await updateSession(db, currentSessionId, {
         status,
         totalPausedMs: useTimerStore.getState()._engine?.state?.totalPausedMs ?? 0,
         currentBlockIndex: useTimerStore.getState()._engine?.state?.blockIndex ?? 0,
@@ -161,9 +204,8 @@ export default function SessionScreen() {
     } catch (e) {
       console.error('Failed to persist timer state:', e);
     }
-  }, [db, id]);
+  }, [db, currentSessionId]);
 
-  // Sync timer to cloud
   const pushTimerSync = useCallback(() => {
     const s = useTimerStore.getState();
     syncTimerState({
@@ -178,80 +220,141 @@ export default function SessionScreen() {
     });
   }, [syncTimerState]);
 
+  // ── Play / Pause handler ───────────────────────────────────────
   const handlePlayPause = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     if (phase === "idle") {
       play();
-      // Mark session as in_progress on first play
-      if (db && id) {
-        updateSession(db, id, {
+      if (db && currentSessionId) {
+        updateSession(db, currentSessionId, {
           status: "in_progress",
           startedAt: new Date().toISOString(),
         }).catch(() => {});
-        createSessionEvent(db, { sessionId: id, type: "timer_started" }).catch(() => {});
+        createSessionEvent(db, { sessionId: currentSessionId, type: "timer_started" }).catch(() => {});
       }
       pushTimerSync();
     } else if (phase === "running" || phase === "overdue") {
       pause();
       persistTimerState('in_progress');
-      if (db && id) {
-        createSessionEvent(db, { sessionId: id, type: "timer_paused" }).catch(() => {});
+      if (db && currentSessionId) {
+        createSessionEvent(db, { sessionId: currentSessionId, type: "timer_paused" }).catch(() => {});
       }
       pushTimerSync();
     } else if (phase === "paused") {
       resume();
       persistTimerState('in_progress');
-      if (db && id) {
-        createSessionEvent(db, { sessionId: id, type: "timer_resumed" }).catch(() => {});
+      if (db && currentSessionId) {
+        createSessionEvent(db, { sessionId: currentSessionId, type: "timer_resumed" }).catch(() => {});
       }
       pushTimerSync();
     } else if (phase === "completed") {
-      // Session already done, navigate to debrief
-      router.replace(`/session/debrief?sessionId=${id}`);
+      router.replace(`/session/debrief?sessionId=${currentSessionId}`);
     }
-  }, [phase, play, pause, resume, db, id, persistTimerState, pushTimerSync]);
+  }, [phase, play, pause, resume, db, currentSessionId, persistTimerState, pushTimerSync]);
 
   const handleSkip = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     skip();
     persistTimerState('in_progress');
-    if (db && id) {
+    if (db && currentSessionId) {
       createSessionEvent(db, {
-        sessionId: id,
+        sessionId: currentSessionId,
         type: "block_skipped",
         blockIndex,
       }).catch(() => {});
     }
     pushTimerSync();
-  }, [skip, db, id, blockIndex, persistTimerState, pushTimerSync]);
+  }, [skip, db, currentSessionId, blockIndex, persistTimerState, pushTimerSync]);
 
+  // ── End / Complete handler ─────────────────────────────────────
   const handleEnd = useCallback(async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     end();
 
-    // Persist session completion to DB
-    if (db && id) {
+    if (db && currentSessionId) {
       try {
-        await updateSession(db, id, {
+        await updateSession(db, currentSessionId, {
           status: "completed",
           endedAt: new Date().toISOString(),
         });
         await createSessionEvent(db, {
-          sessionId: id,
+          sessionId: currentSessionId,
           type: "session_completed",
         });
-        syncSession(id, { status: "completed", endedAt: new Date().toISOString() });
+        syncSession(currentSessionId, { status: "completed", endedAt: new Date().toISOString() });
         pushTimerSync();
       } catch (e) {
         console.error("Failed to save session completion:", e);
       }
     }
 
-    // Navigate to debrief screen instead of going back
-    router.replace(`/session/debrief?sessionId=${id}`);
-  }, [end, router, db, id, pushTimerSync]);
+    router.replace(`/session/debrief?sessionId=${currentSessionId}`);
+  }, [end, router, db, currentSessionId, pushTimerSync]);
+
+  // ── Navigate to another session ────────────────────────────────
+  const navigateToSession = useCallback(async (targetIndex: number) => {
+    const target = allSessions[targetIndex];
+    if (!target) return;
+
+    // Persist current session state before switching (if running/paused)
+    if (phase === 'running' || phase === 'paused' || phase === 'overdue') {
+      await persistTimerState('in_progress');
+    }
+
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setCurrentSessionIndex(targetIndex);
+    setLoading(true);
+    await loadSessionData(target.id);
+  }, [allSessions, phase, persistTimerState, loadSessionData]);
+
+  // ── Undo completed session ─────────────────────────────────────
+  const handleUndoComplete = useCallback(async () => {
+    if (!db || !currentSessionId) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    try {
+      await updateSession(db, currentSessionId, {
+        status: "in_progress",
+        endedAt: null,
+      });
+      await createSessionEvent(db, { sessionId: currentSessionId, type: "session_undone" });
+      // Reload session data to restore timer
+      setLoading(true);
+      await loadSessionData(currentSessionId);
+      setUndoVisible(false);
+      if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    } catch (e) {
+      console.error("Failed to undo session:", e);
+    }
+  }, [db, currentSessionId, loadSessionData]);
+
+  // ── Live pause duration counter ────────────────────────────────
+  const [pauseElapsed, setPauseElapsed] = useState(0);
+  useEffect(() => {
+    if (phase !== 'paused' || !pausedAt) {
+      setPauseElapsed(0);
+      return;
+    }
+    // Immediately compute current pause duration
+    setPauseElapsed(Date.now() - pausedAt);
+    const iv = setInterval(() => {
+      setPauseElapsed(Date.now() - pausedAt);
+    }, 250);
+    return () => clearInterval(iv);
+  }, [phase, pausedAt]);
+
+  // Pause urgency color: ratio of pause time to block duration
+  const getPauseColor = (pauseMs: number, blockMs: number) => {
+    if (blockMs <= 0) return themeColors.success;
+    const ratio = pauseMs / blockMs;
+    if (ratio < 0.05) return themeColors.success;     // < 5% — green
+    if (ratio < 0.15) return '#A3E635';                // 5-15% — lime
+    if (ratio < 0.3) return themeColors.warning;       // 15-30% — amber
+    if (ratio < 0.6) return '#F97316';                 // 30-60% — orange
+    return themeColors.danger;                         // 60%+ — red
+  };
 
   const isPaused = phase === "idle" || phase === "paused" || phase === "completed";
+  const isCompleted = sessionData?.status === "completed" || phase === "completed";
 
   if (loading) {
     return (
@@ -268,7 +371,7 @@ export default function SessionScreen() {
         <Feather name="alert-circle" size={48} color={themeColors.danger} />
         <Text style={[styles.routineName, { color: themeColors.textSecondary }]}>Session Not Found</Text>
         <Text style={[styles.loadingText, { color: themeColors.textSecondary }]}>This session may have been deleted or doesn't exist.</Text>
-        <Pressable style={[styles.endBtn, { backgroundColor: themeColors.accent }]} onPress={() => router.back()}>
+        <Pressable style={[styles.endBtn, { backgroundColor: themeColors.accent }]} onPress={() => router.canGoBack() ? router.back() : router.replace('/(tabs)')}>
           <Text style={[styles.endBtnText, { color: themeColors.white }]}>Go Back</Text>
         </Pressable>
       </View>
@@ -277,6 +380,59 @@ export default function SessionScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: themeColors.background }]}>
+      {/* ── Session navigation strip ── */}
+      {allSessions.length > 1 && (
+        <View style={styles.sessionNav}>
+          <Pressable
+            onPress={() => navigateToSession(currentSessionIndex - 1)}
+            disabled={currentSessionIndex <= 0}
+            style={[styles.navArrow, currentSessionIndex <= 0 && { opacity: 0.3 }]}
+          >
+            <Feather name="chevron-left" size={22} color={themeColors.accent} />
+          </Pressable>
+
+          <FlatList
+            data={allSessions}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            keyExtractor={(item: any) => item.id}
+            contentContainerStyle={{ gap: spacing.xs, alignItems: 'center' }}
+            renderItem={({ item, index }: { item: any; index: number }) => {
+              const isCurrent = index === currentSessionIndex;
+              const done = item.status === 'completed';
+              return (
+                <Pressable
+                  onPress={() => navigateToSession(index)}
+                  style={[
+                    styles.sessionPill,
+                    { backgroundColor: isCurrent ? themeColors.accent : themeColors.surface },
+                    done && !isCurrent && { backgroundColor: themeColors.success },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.sessionPillText,
+                      { color: isCurrent || done ? '#fff' : themeColors.text },
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {item.routineName}
+                  </Text>
+                </Pressable>
+              );
+            }}
+          />
+
+          <Pressable
+            onPress={() => navigateToSession(currentSessionIndex + 1)}
+            disabled={currentSessionIndex >= allSessions.length - 1}
+            style={[styles.navArrow, currentSessionIndex >= allSessions.length - 1 && { opacity: 0.3 }]}
+          >
+            <Feather name="chevron-right" size={22} color={themeColors.accent} />
+          </Pressable>
+        </View>
+      )}
+
       <Text style={[styles.routineName, { color: themeColors.textSecondary }]}>{session.routineName}</Text>
 
       {/* Timer Ring */}
@@ -330,24 +486,68 @@ export default function SessionScreen() {
         ))}
       </View>
 
+      {/* ── Pause Timer View ── */}
+      {phase === 'paused' && pausedAt !== null && pauseElapsed > 0 && (
+        <View style={[styles.pauseView, { backgroundColor: themeColors.surface }]}>
+          <Feather name="pause-circle" size={20} color={getPauseColor(pauseElapsed, blockDurationMs)} />
+          <View style={styles.pauseInfo}>
+            <Text style={[styles.pauseLabel, { color: themeColors.textSecondary }]}>Paused for</Text>
+            <Text style={[styles.pauseTime, { color: getPauseColor(pauseElapsed, blockDurationMs) }]}>
+              {formatTime(pauseElapsed)}
+            </Text>
+          </View>
+          <View style={[
+            styles.pauseBar,
+            { backgroundColor: themeColors.surfaceBorder },
+          ]}>
+            <View style={[
+              styles.pauseBarFill,
+              {
+                backgroundColor: getPauseColor(pauseElapsed, blockDurationMs),
+                width: `${Math.min((pauseElapsed / Math.max(blockDurationMs, 1)) * 100, 100)}%`,
+              },
+            ]} />
+          </View>
+        </View>
+      )}
+
       {/* Controls */}
-      <View style={styles.controls}>
-        <Pressable style={[styles.controlBtn, { backgroundColor: themeColors.surface }]} onPress={handlePlayPause}>
-          {isPaused ? (
-            <Feather name="play" size={28} color={themeColors.accent} />
-          ) : (
-            <Feather name="pause" size={28} color={themeColors.accent} />
-          )}
-        </Pressable>
+      {isCompleted ? (
+        /* ── Completed state: show undo + debrief options ── */
+        <View style={styles.completedControls}>
+          <Pressable
+            style={[styles.undoBtn, { backgroundColor: themeColors.surface, borderColor: themeColors.surfaceBorder }]}
+            onPress={handleUndoComplete}
+          >
+            <Feather name="rotate-ccw" size={20} color={themeColors.warning} />
+            <Text style={[styles.undoBtnText, { color: themeColors.text }]}>Undo Complete</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.endBtn, { backgroundColor: themeColors.accent }]}
+            onPress={() => router.replace(`/session/debrief?sessionId=${currentSessionId}`)}
+          >
+            <Text style={[styles.endBtnText, { color: themeColors.white }]}>View Debrief</Text>
+          </Pressable>
+        </View>
+      ) : (
+        <View style={styles.controls}>
+          <Pressable style={[styles.controlBtn, { backgroundColor: themeColors.surface }]} onPress={handlePlayPause}>
+            {isPaused ? (
+              <Feather name="play" size={28} color={themeColors.accent} />
+            ) : (
+              <Feather name="pause" size={28} color={themeColors.accent} />
+            )}
+          </Pressable>
 
-        <Pressable style={[styles.controlBtn, { backgroundColor: themeColors.surface }]} onPress={handleSkip}>
-          <Feather name="skip-forward" size={28} color={themeColors.textSecondary} />
-        </Pressable>
+          <Pressable style={[styles.controlBtn, { backgroundColor: themeColors.surface }]} onPress={handleSkip}>
+            <Feather name="skip-forward" size={28} color={themeColors.textSecondary} />
+          </Pressable>
 
-        <Pressable style={styles.controlBtnDanger} onPress={handleEnd}>
-          <Feather name="square" size={22} color={themeColors.danger} />
-        </Pressable>
-      </View>
+          <Pressable style={styles.controlBtnDanger} onPress={handleEnd}>
+            <Feather name="square" size={22} color={themeColors.danger} />
+          </Pressable>
+        </View>
+      )}
     </View>
   );
 }
@@ -422,6 +622,77 @@ const styles = StyleSheet.create({
     backgroundColor: "#FEE2E2",
     alignItems: "center",
     justifyContent: "center",
+  },
+  completedControls: {
+    alignItems: "center",
+    gap: spacing.md,
+  },
+  undoBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+  },
+  undoBtnText: {
+    fontSize: fontSize.md,
+    fontWeight: "600",
+  },
+  sessionNav: {
+    flexDirection: "row",
+    alignItems: "center",
+    width: "100%",
+    paddingHorizontal: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  navArrow: {
+    padding: spacing.xs,
+  },
+  sessionPill: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: borderRadius.md,
+    minWidth: 60,
+    alignItems: "center",
+  },
+  sessionPillText: {
+    fontSize: fontSize.xs,
+    fontWeight: "600",
+    maxWidth: 80,
+  },
+  pauseView: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: borderRadius.lg,
+    marginBottom: spacing.lg,
+    width: '100%',
+  },
+  pauseInfo: {
+    flex: 1,
+  },
+  pauseLabel: {
+    fontSize: fontSize.xs,
+    fontWeight: '500',
+  },
+  pauseTime: {
+    fontSize: fontSize.lg,
+    fontWeight: '800',
+    fontVariant: ['tabular-nums'],
+  },
+  pauseBar: {
+    width: 80,
+    height: 6,
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  pauseBarFill: {
+    height: '100%',
+    borderRadius: 3,
   },
   endBtn: {
     marginTop: spacing.lg,

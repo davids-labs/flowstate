@@ -95,7 +95,7 @@ export default function ModuleDetailScreen() {
     pendingTimerRef.current = setTimeout(async () => {
       try {
         await updateModuleSpec(db, mod.id, { archivedAt: new Date().toISOString() });
-        router.back();
+        router.canGoBack() ? router.back() : router.replace('/(tabs)');
       } catch (e) { console.error('Archive failed:', e); }
     }, 3200);
   };
@@ -112,7 +112,7 @@ export default function ModuleDetailScreen() {
     pendingTimerRef.current = setTimeout(async () => {
       try {
         await deleteModuleSpec(db, mod.id);
-        router.back();
+        router.canGoBack() ? router.back() : router.replace('/(tabs)');
       } catch (e) { console.error('Delete failed:', e); }
     }, 3200);
   };
@@ -295,6 +295,28 @@ export default function ModuleDetailScreen() {
         <Text style={[styles.detailLabel, { color: themeColors.text }]}>Live</Text>
         <Text style={[styles.detailValue, { color: themeColors.muted }]}>{mod.isLive ? 'Yes (computed)' : 'No (logged)'}</Text>
       </View>
+
+      <Pressable
+        style={[styles.detailSection, { backgroundColor: themeColors.surface }]}
+        onPress={() => router.push(`/modules/schedules?moduleId=${mod.id}`)}
+      >
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+          <Feather name="calendar" size={18} color={themeColors.accent} />
+          <Text style={[styles.detailLabel, { color: themeColors.text }]}>Recurring Schedule</Text>
+        </View>
+        <Feather name="chevron-right" size={18} color={themeColors.muted} />
+      </Pressable>
+
+      <Pressable
+        style={[styles.detailSection, { backgroundColor: themeColors.surface }]}
+        onPress={() => router.push(`/modules/reminders?moduleId=${mod.id}`)}
+      >
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+          <Feather name="bell" size={18} color={themeColors.accent} />
+          <Text style={[styles.detailLabel, { color: themeColors.text }]}>Reminders</Text>
+        </View>
+        <Feather name="chevron-right" size={18} color={themeColors.muted} />
+      </Pressable>
 
       <View style={styles.actionRow}>
         <Pressable style={[styles.actionBtn, { backgroundColor: themeColors.surface }]} onPress={() => router.push(`/modules/edit?id=${mod.id}`)}>

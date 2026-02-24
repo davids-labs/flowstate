@@ -1,5 +1,4 @@
 import {
-  getAuth,
   signInAnonymously,
   GoogleAuthProvider,
   signInWithCredential,
@@ -7,9 +6,7 @@ import {
   onAuthStateChanged,
   type User,
 } from 'firebase/auth';
-import { app } from './config';
-
-const auth = getAuth(app);
+import { getAuthInstance } from './config';
 
 let _currentUser: User | null = null;
 let _uid: string | null = null;
@@ -38,7 +35,7 @@ export async function signInAnon(): Promise<string> {
   if (_uid) return _uid;
 
   try {
-    const result = await signInAnonymously(auth);
+    const result = await signInAnonymously(getAuthInstance());
     _currentUser = result.user;
     _uid = result.user.uid;
     return _uid;
@@ -55,7 +52,7 @@ export async function signInAnon(): Promise<string> {
  * @param idToken - Google ID token from the sign-in flow
  */
 export async function linkGoogleAccount(idToken: string): Promise<User> {
-  const user = auth.currentUser;
+  const user = getAuthInstance().currentUser;
   if (!user) throw new Error('No signed-in user to link');
 
   const credential = GoogleAuthProvider.credential(idToken);
@@ -68,7 +65,7 @@ export async function linkGoogleAccount(idToken: string): Promise<User> {
     // If account already linked or credential already in use,
     // sign in with the Google credential directly
     if (err.code === 'auth/credential-already-in-use' || err.code === 'auth/provider-already-linked') {
-      const result = await signInWithCredential(auth, credential);
+      const result = await signInWithCredential(getAuthInstance(), credential);
       _currentUser = result.user;
       _uid = result.user.uid;
       return result.user;
@@ -84,7 +81,7 @@ export async function linkGoogleAccount(idToken: string): Promise<User> {
 export function listenAuthState(
   onUser: (user: User | null) => void,
 ): () => void {
-  return onAuthStateChanged(auth, (user) => {
+  return onAuthStateChanged(getAuthInstance(), (user) => {
     _currentUser = user;
     _uid = user?.uid ?? null;
     onUser(user);
@@ -95,7 +92,7 @@ export function listenAuthState(
  * Sign out the current user.
  */
 export async function signOut(): Promise<void> {
-  await auth.signOut();
+  await getAuthInstance().signOut();
   _currentUser = null;
   _uid = null;
 }

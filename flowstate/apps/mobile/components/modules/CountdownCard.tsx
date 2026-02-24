@@ -3,7 +3,7 @@ import { View, Text, StyleSheet } from 'react-native';
 import { fontSize, spacing, borderRadius } from '../../constants/theme';
 import { useTheme } from '../../constants/ThemeContext';
 
-type DisplayMode = 'days' | 'dhms' | 'weeks' | 'auto';
+type DisplayMode = 'days' | 'dhms' | 'auto';
 
 interface CountdownCardProps {
   label: string;
@@ -21,8 +21,8 @@ interface CountdownCardProps {
 function formatRemaining(ms: number, mode: DisplayMode): { primary: string; unit: string } {
   if (ms <= 0) return { primary: '0', unit: 'done!' };
 
+  const days = Math.floor(ms / 86400000);
   const totalSeconds = Math.floor(ms / 1000);
-  const days = Math.floor(totalSeconds / 86400);
   const hours = Math.floor((totalSeconds % 86400) / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
@@ -31,9 +31,7 @@ function formatRemaining(ms: number, mode: DisplayMode): { primary: string; unit
     mode === 'auto'
       ? days < 7
         ? 'dhms'
-        : days < 60
-          ? 'days'
-          : 'weeks'
+        : 'days'
       : mode;
 
   switch (effectiveMode) {
@@ -42,17 +40,9 @@ function formatRemaining(ms: number, mode: DisplayMode): { primary: string; unit
         primary: `${days}d ${String(hours).padStart(2, '0')}h ${String(minutes).padStart(2, '0')}m ${String(seconds).padStart(2, '0')}s`,
         unit: '',
       };
-    case 'weeks': {
-      const weeks = Math.floor(days / 7);
-      const rem = days % 7;
-      return {
-        primary: `${weeks}`,
-        unit: `week${weeks !== 1 ? 's' : ''} and ${rem} day${rem !== 1 ? 's' : ''}`,
-      };
-    }
     case 'days':
     default:
-      return { primary: String(days), unit: `day${days !== 1 ? 's' : ''} remaining` };
+      return { primary: `Day ${days}`, unit: `${days} day${days !== 1 ? 's' : ''} remaining` };
   }
 }
 

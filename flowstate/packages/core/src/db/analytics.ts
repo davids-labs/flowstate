@@ -561,3 +561,147 @@ export async function getPlanProgress(db: DB): Promise<PlanProgressStats | null>
     heatmapData,
   };
 }
+
+// ─── Correlation Engine ─────────────────────────────────────────
+
+export interface CorrelationResult {
+  moduleA: { id: string; label: string };
+  moduleB: { id: string; label: string };
+  correlation: number; // -1 to 1
+  summary: string; // hard-coded template string
+  windowDays: number;
+}
+
+/**
+ * Correlate two modules over a 30-day window.
+ * ModuleA → uses ModuleValue data (e.g. Sleep Score, rating)
+ * ModuleB → uses Session duration (total minutes) linked to that module's routine
+ *
+ * Returns a hard-coded template string describing the relationship.
+ * Zero AI/NLP — purely logical templates.
+ */
+export async function getCorrelation(
+  db: DB,
+  moduleAId: string,
+  moduleBId: string,
+  windowDays: number = 30,
+): Promise<CorrelationResult | null> {
+  const specA = (await db.select().from(moduleSpecs).where(eq(moduleSpecs.id, moduleAId)))[0];
+  const specB = (await db.select().from(moduleSpecs).where(eq(moduleSpecs.id, moduleBId)))[0];
+  if (!specA || !specB) return null;
+
+  const today = new Date();
+  const startDate = new Date(today);
+  startDate.setDate(startDate.getDate() - windowDays);
+  const startStr = startDate.toISOString().slice(0, 10);
+  const endStr = today.toISOString().slice(0, 10);
+  const dates = getDatesInRange(startStr, endStr);
+
+  // Module A: collect daily values (numeric)
+  const aValues = await db.select().from(moduleValues).where(
+    and(
+      eq(moduleValues.moduleId, moduleAId),
+      gte(moduleValues.date, startStr),
+      lte(moduleValues.date, endStr),
+    ),
+  );
+  const aByDate = new Map<string, number>();
+  for (const v of aValues) {
+    const num = parseFloat(v.value);
+    if (!isNaN(num)) aByDate.set(v.date, num);
+  }
+
+  // Module B: collect daily session duration (minutes)
+  const allDayPlans = await db.select().from(dayPlans).where(
+    and(gte(dayPlans.date, startStr), lte(dayPlans.date, endStr)),
+  );
+  const dayPlanIds = allDayPlans.map((d: any) => d.id);
+  const dayPlanDateMap = new Map<string, string>();
+  for (const d of allDayPlans) dayPlanDateMap.set(d.id, d.date);
+
+  const bSessions = dayPlanIds.length > 0
+    ? await db.select().from(sessions).where(
+        and(
+          inArray(sessions.dayPlanId, dayPlanIds),
+          eq(sessions.routineId, moduleBId),
+        ),
+      )
+    : [];
+
+  const bByDate = new Map<string, number>();
+  for (const s of bSessions) {
+    if (s.startedAt && s.endedAt) {
+      const date = dayPlanDateMap.get(s.dayPlanId);
+      if (!date) continue;
+      const durationMin = (new Date(s.endedAt).getTime() - new Date(s.startedAt).getTime() - (s.totalPausedMs || 0)) / 60000;
+      bByDate.set(date, (bByDate.get(date) ?? 0) + durationMin);
+    }
+  }
+
+  // Build paired data points
+  const pairedA: number[] = [];
+  const pairedB: number[] = [];
+  for (const date of dates) {
+    if (aByDate.has(date) && bByDate.has(date)) {
+      pairedA.push(aByDate.get(date)!);
+      pairedB.push(bByDate.get(date)!);
+    }
+  }
+
+  if (pairedA.length < 5) {
+    return {
+      moduleA: { id: specA.id, label: specA.label },
+      moduleB: { id: specB.id, label: specB.label },
+      correlation: 0,
+      summary: `Not enough overlapping data between "${specA.label}" and "${specB.label}" (need at least 5 days, have ${pairedA.length}).`,
+      windowDays,
+    };
+  }
+
+  // Pearson correlation coefficient
+  const n = pairedA.length;
+  const meanA = pairedA.reduce((s, v) => s + v, 0) / n;
+  const meanB = pairedB.reduce((s, v) => s + v, 0) / n;
+  let sumAB = 0, sumA2 = 0, sumB2 = 0;
+  for (let i = 0; i < n; i++) {
+    const da = pairedA[i] - meanA;
+    const db_ = pairedB[i] - meanB;
+    sumAB += da * db_;
+    sumA2 += da * da;
+    sumB2 += db_ * db_;
+  }
+  const denom = Math.sqrt(sumA2 * sumB2);
+  const r = denom === 0 ? 0 : sumAB / denom;
+
+  // Weekly aggregation for template string
+  const weeklyA: number[] = [];
+  const weeklyB: number[] = [];
+  for (let i = 0; i < pairedA.length; i += 7) {
+    const sliceA = pairedA.slice(i, i + 7);
+    const sliceB = pairedB.slice(i, i + 7);
+    weeklyA.push(sliceA.reduce((s, v) => s + v, 0) / sliceA.length);
+    weeklyB.push(sliceB.reduce((s, v) => s + v, 0));
+  }
+
+  const medianB = [...weeklyB].sort((a, b) => a - b)[Math.floor(weeklyB.length / 2)] ?? 0;
+  const highWeeks = weeklyA.filter((_, i) => weeklyB[i] > medianB);
+  const lowWeeks = weeklyA.filter((_, i) => weeklyB[i] <= medianB);
+  const highAvg = highWeeks.length > 0 ? highWeeks.reduce((s, v) => s + v, 0) / highWeeks.length : 0;
+  const lowAvg = lowWeeks.length > 0 ? lowWeeks.reduce((s, v) => s + v, 0) / lowWeeks.length : 0;
+  const pctChange = lowAvg !== 0 ? Math.round(((highAvg - lowAvg) / Math.abs(lowAvg)) * 100) : 0;
+
+  const bTotalHrs = Math.round(medianB / 60);
+  const direction = pctChange >= 0 ? 'increased' : 'decreased';
+
+  const summary = Math.abs(r) < 0.2
+    ? `No meaningful correlation found between "${specA.label}" and "${specB.label}" over ${windowDays} days.`
+    : `On weeks where ${specB.label} > ${bTotalHrs}h, ${specA.label} ${direction} by ${Math.abs(pctChange)}%.`;
+
+  return {
+    moduleA: { id: specA.id, label: specA.label },
+    moduleB: { id: specB.id, label: specB.label },
+    correlation: Math.round(r * 100) / 100,
+    summary,
+    windowDays,
+  };
+}

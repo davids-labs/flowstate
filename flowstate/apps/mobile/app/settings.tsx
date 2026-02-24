@@ -425,6 +425,12 @@ export default function SettingsScreen() {
         onPress={handleExportData}
       />
       <SettingRow
+        icon="hard-drive"
+        label="Backup & Restore"
+        subtitle="Full database backup or restore"
+        onPress={() => router.push('/backup')}
+      />
+      <SettingRow
         icon="cloud"
         label="Cloud Sync"
         subtitle={

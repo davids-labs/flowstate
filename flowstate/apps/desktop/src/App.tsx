@@ -1,5 +1,5 @@
 import { HashRouter, Routes, Route, NavLink } from 'react-router-dom';
-import { Home, Calendar, List, Box, Settings as SettingsIcon } from 'lucide-react';
+import { Home, Calendar, List, Box, BarChart2, Settings as SettingsIcon, HardDrive } from 'lucide-react';
 import { DatabaseProvider } from './components/DatabaseProvider';
 import { HomePage } from './pages/Home';
 import { TodayPage } from './pages/Today';
@@ -10,6 +10,8 @@ import { SessionPage } from './pages/Session';
 import { WeekPage } from './pages/Week';
 import { SettingsPage } from './pages/Settings';
 import { CompactTimerPage } from './pages/Compact';
+import { StatisticsPage } from './pages/Statistics';
+import { BackupPage } from './pages/Backup';
 import './App.css';
 
 function App() {
@@ -51,6 +53,12 @@ function MainLayout() {
           <NavLink to="/modules" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
             <Box size={18} /> Modules
           </NavLink>
+          <NavLink to="/statistics" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
+            <BarChart2 size={18} /> Statistics
+          </NavLink>
+          <NavLink to="/backup" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
+            <HardDrive size={18} /> Backup
+          </NavLink>
         </div>
 
         <div className="sidebar-footer">
@@ -70,6 +78,8 @@ function MainLayout() {
           <Route path="/day/:date" element={<DayPage />} />
           <Route path="/session/:id" element={<SessionPage />} />
           <Route path="/week/:weekId" element={<WeekPage />} />
+          <Route path="/statistics" element={<StatisticsPage />} />
+          <Route path="/backup" element={<BackupPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </main>

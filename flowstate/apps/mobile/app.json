@@ -12,7 +12,14 @@
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/2f1700bd-3462-4b56-ab43-1169966df4fa"
+    },
     "plugins": [
+      "expo-updates",
       "expo-router",
       "expo-sqlite",
       "expo-notifications",
@@ -30,6 +37,36 @@
               "targetCellWidth": 4,
               "targetCellHeight": 2,
               "description": "Today's plan, must-do progress & module tracking",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "FlowStateWeeklyStats",
+              "label": "FlowState — Weekly Stats",
+              "minWidth": "320dp",
+              "minHeight": "120dp",
+              "targetCellWidth": 4,
+              "targetCellHeight": 2,
+              "description": "7-day session bar chart & streak counter",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "FlowStateQuickLog",
+              "label": "FlowState — Quick Log",
+              "minWidth": "320dp",
+              "minHeight": "180dp",
+              "targetCellWidth": 4,
+              "targetCellHeight": 3,
+              "description": "One-tap module log status overview",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "FlowStateGoalProgress",
+              "label": "FlowState — Goals",
+              "minWidth": "320dp",
+              "minHeight": "150dp",
+              "targetCellWidth": 4,
+              "targetCellHeight": 2,
+              "description": "Active goal progress with ahead/behind status",
               "updatePeriodMillis": 1800000
             }
           ]

@@ -3,7 +3,7 @@ import { View, Text, StyleSheet } from 'react-native';
 import { fontSize, spacing, borderRadius } from '../../constants/theme';
 import { useTheme } from '../../constants/ThemeContext';
 
-type DisplayMode = 'days' | 'dhms' | 'years_days' | 'auto';
+type DisplayMode = 'days' | 'dhms' | 'auto';
 
 interface CountupCardProps {
   label: string;
@@ -17,14 +17,13 @@ interface CountupCardProps {
 function formatElapsed(ms: number, mode: DisplayMode): { primary: string; unit: string } {
   if (ms <= 0) return { primary: '0', unit: 'days' };
 
+  const days = Math.floor(ms / 86400000);
   const totalSeconds = Math.floor(ms / 1000);
-  const days = Math.floor(totalSeconds / 86400);
   const hours = Math.floor((totalSeconds % 86400) / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
 
-  const effectiveMode =
-    mode === 'auto' ? (days > 365 ? 'years_days' : 'days') : mode;
+  const effectiveMode = mode === 'auto' ? 'days' : mode;
 
   switch (effectiveMode) {
     case 'dhms':
@@ -32,14 +31,6 @@ function formatElapsed(ms: number, mode: DisplayMode): { primary: string; unit: 
         primary: `${days}d ${String(hours).padStart(2, '0')}h ${String(minutes).padStart(2, '0')}m ${String(seconds).padStart(2, '0')}s`,
         unit: '',
       };
-    case 'years_days': {
-      const years = Math.floor(days / 365);
-      const rem = days % 365;
-      return {
-        primary: `${years}`,
-        unit: `year${years !== 1 ? 's' : ''}, ${rem} day${rem !== 1 ? 's' : ''}`,
-      };
-    }
     case 'days':
     default:
       return { primary: `Day ${days}`, unit: '' };

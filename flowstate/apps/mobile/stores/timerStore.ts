@@ -27,9 +27,16 @@ interface TimerStoreState {
   blocks: TimerBlock[];
   currentBlockName: string;
   routineName: string;
+  pausedAt: number | null; // timestamp when paused
+  blockDurationMs: number; // current block total duration
 
   // Actions
   init: (sessionId: string, blocks: TimerBlock[], routineName?: string) => void;
+  restore: (sessionId: string, blocks: TimerBlock[], routineName: string, opts: {
+    blockIndex: number;
+    startedAt: number;
+    totalPausedMs: number;
+  }) => void;
   play: () => void;
   pause: () => void;
   resume: () => void;
@@ -60,6 +67,8 @@ export const useTimerStore = create<TimerStoreState>((set, get) => {
       isOverdue: e.isOverdue,
       sessionId: e.state.sessionId,
       currentBlockName: blocks[e.state.blockIndex]?.name ?? '',
+      pausedAt: e.state.pausedAt,
+      blockDurationMs: e.state.blockDurationMs,
     });
   };
 
@@ -111,6 +120,8 @@ export const useTimerStore = create<TimerStoreState>((set, get) => {
     blocks: [],
     currentBlockName: '',
     routineName: '',
+    pausedAt: null,
+    blockDurationMs: 0,
     _engine: engine,
     _intervalId: null,
     _notifCounter: 0,
@@ -119,6 +130,19 @@ export const useTimerStore = create<TimerStoreState>((set, get) => {
       stopTicking();
       engine.init({ sessionId, blocks });
       set({ blocks, routineName: routineName ?? '' });
+      syncFromEngine();
+    },
+
+    restore: (sessionId, blocks, routineName, opts) => {
+      stopTicking();
+      engine.restore({
+        sessionId,
+        blocks,
+        blockIndex: opts.blockIndex,
+        startedAt: opts.startedAt,
+        totalPausedMs: opts.totalPausedMs,
+      });
+      set({ blocks, routineName });
       syncFromEngine();
     },
 

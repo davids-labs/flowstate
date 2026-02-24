@@ -5,8 +5,7 @@ import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { ScreenWrapper } from '../../components/layout/ScreenWrapper';
 import { SectionHeader } from '../../components/layout/SectionHeader';
-import { createModuleSpec, getRoutines, moduleSpecs } from '@flowstate/core';
-import { eq } from 'drizzle-orm';
+import { createModuleSpec, getModuleSpec, getRoutines } from '@flowstate/core';
 import { useDatabaseSafe } from '../../components/DatabaseProvider';
 import { fontSize, spacing, borderRadius } from '../../constants/theme';
 import { useTheme } from '../../constants/ThemeContext';
@@ -170,8 +169,8 @@ export default function CreateModuleScreen() {
     try {
       let suffix = 1;
       while (true) {
-        const existing = await db.select().from(moduleSpecs).where(eq(moduleSpecs.id, id));
-        if (existing.length === 0) break;
+        const existing = await getModuleSpec(db, id);
+        if (!existing) break;
         suffix++;
         id = `${baseId}-${suffix}`;
       }
@@ -192,7 +191,7 @@ export default function CreateModuleScreen() {
         isLive,
         required,
       });
-      router.back();
+      router.canGoBack() ? router.back() : router.replace('/(tabs)');
     } catch (err) {
       console.error('Failed to save module:', err);
       Alert.alert('Error', 'Failed to create module. Please try again.');

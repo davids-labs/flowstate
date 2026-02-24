@@ -1,5 +1,5 @@
-import { initializeApp } from 'firebase/app';
-import { getFirestore } from 'firebase/firestore';
+import { initializeApp, type FirebaseApp } from 'firebase/app';
+import { getFirestore, type Firestore } from 'firebase/firestore';
 import { getAuth, type Auth } from 'firebase/auth';
 
 // Firebase config from environment variables with fallback
@@ -19,26 +19,47 @@ const firebaseConfig = {
     || "1:693723347422:web:f19b6ba153c20ef1c7454f",
 };
 
-export const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app);
+// ─── Lazy initialization ────────────────────────────────────────
+// All Firebase services are created on first use so the module
+// can load successfully even when Firebase SDK is misconfigured.
 
-// Use AsyncStorage for auth persistence in React Native, fallback to default web auth
-let auth: Auth;
-try {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const rnAuth = require('firebase/auth');
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-  if (rnAuth.initializeAuth && rnAuth.getReactNativePersistence) {
-    auth = rnAuth.initializeAuth(app, {
-      persistence: rnAuth.getReactNativePersistence(AsyncStorage),
-    });
-  } else {
-    auth = getAuth(app);
-  }
-} catch {
-  // Fallback for web or environments without AsyncStorage
-  auth = getAuth(app);
+let _app: FirebaseApp | null = null;
+
+export function getAppInstance(): FirebaseApp {
+  if (!_app) _app = initializeApp(firebaseConfig);
+  return _app;
 }
 
-export { auth };
+/** @deprecated Use getAppInstance() — kept for backwards compat */
+export const app: FirebaseApp = null as unknown as FirebaseApp;
+
+let _db: Firestore | null = null;
+
+export function getDbInstance(): Firestore {
+  if (!_db) _db = getFirestore(getAppInstance());
+  return _db;
+}
+
+let _auth: Auth | null = null;
+
+export function getAuthInstance(): Auth {
+  if (_auth) return _auth;
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const rnAuth = require('firebase/auth');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+    if (rnAuth.initializeAuth && rnAuth.getReactNativePersistence) {
+      _auth = rnAuth.initializeAuth(getAppInstance(), {
+        persistence: rnAuth.getReactNativePersistence(AsyncStorage),
+      });
+    } else {
+      _auth = getAuth(getAppInstance());
+    }
+  } catch {
+    _auth = getAuth(getAppInstance());
+  }
+
+  return _auth;
+}

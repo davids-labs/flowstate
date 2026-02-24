@@ -1,13 +1,29 @@
 import React from 'react';
 import type { WidgetTaskHandlerProps } from 'react-native-android-widget';
 import { FlowStateDayWidget } from './components/widgets/FlowStateDayWidget';
-import { readWidgetSnapshot } from './services/widgetData';
+import { WeeklyStatsWidget } from './components/widgets/WeeklyStatsWidget';
+import { QuickLogWidget } from './components/widgets/QuickLogWidget';
+import { GoalProgressWidget } from './components/widgets/GoalProgressWidget';
+import { readWidgetSnapshot, readWeeklyStatsSnapshot, readQuickLogSnapshot, readGoalProgressSnapshot } from './services/widgetData';
 
-const nameToWidget = {
+const nameToWidget: Record<string, React.ComponentType<any>> = {
   FlowStateDay: FlowStateDayWidget,
+  FlowStateWeeklyStats: WeeklyStatsWidget,
+  FlowStateQuickLog: QuickLogWidget,
+  FlowStateGoalProgress: GoalProgressWidget,
 };
 
-async function getWidgetProps() {
+async function getWidgetProps(widgetName: string) {
+  if (widgetName === 'FlowStateWeeklyStats') {
+    return (await readWeeklyStatsSnapshot()) ?? {};
+  }
+  if (widgetName === 'FlowStateQuickLog') {
+    return (await readQuickLogSnapshot()) ?? {};
+  }
+  if (widgetName === 'FlowStateGoalProgress') {
+    return (await readGoalProgressSnapshot()) ?? {};
+  }
+  // Default: FlowStateDay
   const snapshot = await readWidgetSnapshot();
   if (!snapshot) return {};
   return {
@@ -29,19 +45,19 @@ export async function widgetTaskHandler(props: WidgetTaskHandlerProps) {
 
   switch (props.widgetAction) {
     case 'WIDGET_ADDED': {
-      const widgetProps = await getWidgetProps();
+      const widgetProps = await getWidgetProps(widgetInfo.widgetName);
       props.renderWidget(<Widget {...widgetProps} />);
       break;
     }
 
     case 'WIDGET_UPDATE': {
-      const widgetProps = await getWidgetProps();
+      const widgetProps = await getWidgetProps(widgetInfo.widgetName);
       props.renderWidget(<Widget {...widgetProps} />);
       break;
     }
 
     case 'WIDGET_RESIZED': {
-      const widgetProps = await getWidgetProps();
+      const widgetProps = await getWidgetProps(widgetInfo.widgetName);
       props.renderWidget(<Widget {...widgetProps} />);
       break;
     }

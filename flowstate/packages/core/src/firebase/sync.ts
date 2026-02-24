@@ -1,20 +1,15 @@
 import {
-  getFirestore,
   collection,
   doc,
   setDoc,
   getDocs,
   onSnapshot,
-  query,
-  where,
   serverTimestamp,
   type DocumentData,
   type Unsubscribe,
 } from 'firebase/firestore';
-import { app } from './config';
+import { getDbInstance } from './config';
 import { getUid } from './auth';
-
-const firestore = getFirestore(app);
 
 // ─── Device ID ──────────────────────────────────────────────────
 // Each device generates a unique ID on first launch.
@@ -95,7 +90,7 @@ export async function flushOfflineQueue(): Promise<{ flushed: number; failed: nu
     try {
       const uid = getUid();
       if (!uid) break;
-      const docRef = doc(firestore, cmd.collectionPath, cmd.docId);
+      const docRef = doc(getDbInstance(), cmd.collectionPath, cmd.docId);
       await setDoc(docRef, { ...cmd.data, updatedAt: serverTimestamp() }, { merge: true });
       _offlineQueue.shift();
       flushed++;
@@ -141,7 +136,7 @@ export async function pushToFirestore(
   };
 
   try {
-    const docRef = doc(firestore, docPath, docId);
+    const docRef = doc(getDbInstance(), docPath, docId);
     await setDoc(docRef, payload, { merge: true });
   } catch (err) {
     console.warn('[Sync] Push failed, queuing for retry:', err);
@@ -171,7 +166,7 @@ export function listenForRemoteChanges(
     return () => {};
   }
 
-  const docRef = doc(firestore, `users/${uid}/${collectionName}`, docId);
+  const docRef = doc(getDbInstance(), `users/${uid}/${collectionName}`, docId);
 
   return onSnapshot(docRef, (snap) => {
     if (!snap.exists()) return;
@@ -261,7 +256,7 @@ export function listenCollection(
     return () => {};
   }
 
-  const colRef = collection(firestore, `users/${uid}/${collectionName}`);
+  const colRef = collection(getDbInstance(), `users/${uid}/${collectionName}`);
 
   return onSnapshot(colRef, (snapshot) => {
     const remoteDocs: Array<{ id: string; data: DocumentData }> = [];
@@ -291,7 +286,7 @@ export async function pullCollection(
   const uid = getUid();
   if (!uid) return [];
 
-  const colRef = collection(firestore, `users/${uid}/${collectionName}`);
+  const colRef = collection(getDbInstance(), `users/${uid}/${collectionName}`);
   const snapshot = await getDocs(colRef);
 
   return snapshot.docs.map((d) => ({ id: d.id, data: d.data() }));

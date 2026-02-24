@@ -78,6 +78,17 @@ export const photoLogConfigSchema = z.object({
   resetDaily: z.boolean().optional(),
 });
 
+export const timerConfigSchema = z.object({
+  defaultDurationSeconds: z.number().int().positive(),
+});
+
+export const routineLauncherConfigSchema = z.object({
+  routineId: z.string(),
+  autoStartOnTap: z.boolean().optional(),
+  showBlockPreview: z.boolean().optional(),
+  accentColor: z.string().optional(),
+});
+
 // ─── Config discriminated by type ───────────────────────────────
 
 export const moduleConfigSchemas = {
@@ -92,6 +103,8 @@ export const moduleConfigSchemas = {
   streak_counter: streakCounterConfigSchema,
   tally: tallyConfigSchema,
   photo_log: photoLogConfigSchema,
+  timer: timerConfigSchema,
+  routine_launcher: routineLauncherConfigSchema,
 } as const;
 
 // ─── ModuleSpec Schema ──────────────────────────────────────────
@@ -108,6 +121,8 @@ export const moduleTypeSchema = z.enum([
   'streak_counter',
   'tally',
   'photo_log',
+  'timer',
+  'routine_launcher',
 ]);
 
 export const surfaceSchema = z.enum([
@@ -127,8 +142,8 @@ export const moduleSpecSchema = z.object({
   placements: z.array(surfaceSchema).min(1),
   isLive: z.boolean(),
   required: z.boolean(),
-  showInSummary: z.boolean().optional(),
-  archivedAt: z.string().nullable().optional(),
+  showInSummary: z.boolean().optional(),  collectionId: z.string().nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),  archivedAt: z.string().nullable().optional(),
   createdAt: z.string().optional(),
   updatedAt: z.string().optional(),
 });

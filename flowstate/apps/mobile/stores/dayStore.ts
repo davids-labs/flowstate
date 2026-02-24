@@ -30,10 +30,17 @@ interface DayStoreState {
   loadDay: (db: any, date: string) => Promise<void>;
   toggleMustDo: (db: any, index: number, onSync?: (date: string, data: Record<string, unknown>) => void) => Promise<void>;
   setModuleValue: (db: any, moduleId: string, value: string, onSync?: (date: string, moduleId: string, value: string) => void) => Promise<void>;
+  rolloverMustDos: (db: any) => Promise<void>;
 }
 
 function todayDate(): string {
   const d = new Date();
+  return d.toISOString().slice(0, 10);
+}
+
+function tomorrowDate(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
   return d.toISOString().slice(0, 10);
 }
 
@@ -131,6 +138,71 @@ export const useDayStore = create<DayStoreState>((set, get) => ({
       onSync?.(date, moduleId, value);
     } catch (err) {
       console.error('Failed to save module value:', err);
+    }
+  },
+
+  /**
+   * Auto-Rollover (Motion): At 04:00 AM, any unchecked "Must-Do" items
+   * are upserted into the next day's DayPlan.
+   * Call this on app launch / focus to check if rollover is needed.
+   */
+  rolloverMustDos: async (db: any) => {
+    try {
+      const now = new Date();
+      const currentHour = now.getHours();
+
+      // Only run after 4 AM
+      if (currentHour < 4) return;
+
+      // Check yesterday's plan
+      const yesterday = new Date(now);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayStr = yesterday.toISOString().slice(0, 10);
+      const todayStr = todayDate();
+
+      const yesterdayPlan = await queries.getDayPlan(db, yesterdayStr);
+      if (!yesterdayPlan) return;
+
+      const mustDo: string[] = yesterdayPlan.mustDo ?? [];
+      const mustDoDone: boolean[] = yesterdayPlan.mustDoDone ?? [];
+
+      // Find unchecked must-do items
+      const unchecked = mustDo.filter((_: string, i: number) => !mustDoDone[i]);
+      if (unchecked.length === 0) return;
+
+      // Get or create today's plan
+      const todayPlan = await queries.getDayPlan(db, todayStr);
+
+      if (todayPlan) {
+        // Merge: add unchecked items that aren't already in today's must-do
+        const existingMustDo: string[] = todayPlan.mustDo ?? [];
+        const existingDone: boolean[] = todayPlan.mustDoDone ?? [];
+        const newItems = unchecked.filter((item: string) => !existingMustDo.includes(item));
+
+        if (newItems.length === 0) return;
+
+        const mergedMustDo = [...existingMustDo, ...newItems];
+        const mergedDone = [...existingDone, ...newItems.map(() => false)];
+
+        await queries.upsertDayPlan(db, {
+          date: todayStr,
+          title: todayPlan.title,
+          mustDo: mergedMustDo,
+          mustDoDone: mergedDone,
+          moduleIds: todayPlan.moduleIds,
+        });
+      } else {
+        // Create a new day plan with rolled-over items
+        await queries.upsertDayPlan(db, {
+          date: todayStr,
+          title: `Day Plan`,
+          mustDo: unchecked,
+          mustDoDone: unchecked.map(() => false),
+          moduleIds: [],
+        });
+      }
+    } catch (err) {
+      console.error('Failed to rollover must-dos:', err);
     }
   },
 }));

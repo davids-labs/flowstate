@@ -6,7 +6,7 @@ import { ScreenWrapper } from '../../components/layout/ScreenWrapper';
 import { SectionHeader } from '../../components/layout/SectionHeader';
 import { SessionCard } from '../../components/modules/SessionCard';
 import { ModuleCard } from '../../components/modules/ModuleCard';
-import { getModuleSpecs, getActivePlan, getDayPlan as getDbDayPlan, getSessionsForDay, getHomescreenLayout, getRoutine, getRoutineBlocks } from '@flowstate/core';
+import { getModuleSpecs, getActivePlan, getDayPlan as getDbDayPlan, getSessionsForDay, getHomescreenLayout, getRoutine, getRoutineBlocks, getAllStreaks } from '@flowstate/core';
 import { useDatabaseSafe } from '../../components/DatabaseProvider';
 import { useModuleValue, parseNumber } from '../../hooks/useModuleValue';
 import { useDayStore } from '../../stores/dayStore';
@@ -54,6 +54,7 @@ export default function HomeScreen() {
   const [dayInfo, setDayInfo] = useState<{ dayNumber?: number; totalDays?: number }>({});
   const [hasCustomLayout, setHasCustomLayout] = useState(false);
   const [layoutWidths, setLayoutWidths] = useState<Record<string, number>>({});
+  const [streaks, setStreaks] = useState<Record<string, { currentStreak: number; longestStreak: number }>>({});
 
   const loadData = useCallback(async () => {
     if (!db || !isReady) return;
@@ -128,6 +129,13 @@ export default function HomeScreen() {
 
       const plan = await getActivePlan(db);
       if (plan) setPlanName(plan.name);
+
+      // Load streaks for all active modules
+      try {
+        const ids = activeSpecs.map((s: any) => s.id);
+        const streakData = await getAllStreaks(db, ids);
+        setStreaks(streakData);
+      } catch {}
     } catch (err) {
       console.error('Failed to load homescreen data:', err);
     }
@@ -161,6 +169,30 @@ export default function HomeScreen() {
           <Feather name="settings" size={22} color={themeColors.muted} />
         </Pressable>
       </View>
+
+      {/* ── Quick Stats Bar ── */}
+      {today && (
+        <View style={[styles.quickStatsBar, { backgroundColor: themeColors.surface }]}>
+          <View style={styles.quickStat}>
+            <Text style={[styles.quickStatValue, { color: themeColors.accent }]}>
+              {mustDoTotal > 0 ? Math.round((doneCount / mustDoTotal) * 100) : 0}%
+            </Text>
+            <Text style={[styles.quickStatLabel, { color: themeColors.muted }]}>Must-Dos</Text>
+          </View>
+          <View style={[styles.quickStatDivider, { backgroundColor: themeColors.border }]} />
+          <View style={styles.quickStat}>
+            <Text style={[styles.quickStatValue, { color: themeColors.text }]}>{sessions.length}</Text>
+            <Text style={[styles.quickStatLabel, { color: themeColors.muted }]}>Sessions</Text>
+          </View>
+          <View style={[styles.quickStatDivider, { backgroundColor: themeColors.border }]} />
+          <View style={styles.quickStat}>
+            <Text style={[styles.quickStatValue, { color: themeColors.text }]}>
+              {Object.values(streaks).filter(s => s.currentStreak > 0).length}
+            </Text>
+            <Text style={[styles.quickStatLabel, { color: themeColors.muted }]}>Active Streaks</Text>
+          </View>
+        </View>
+      )}
 
       {/* ── Zone 1: Live Modules ── */}
       <SectionHeader title="Live" subtitle="Updating in real time" />
@@ -264,15 +296,19 @@ export default function HomeScreen() {
       <View style={styles.manageLinkRow}>
         <Pressable style={styles.manageBtn} onPress={() => router.push('/modules')}>
           <Feather name="settings" size={16} color={themeColors.accent} />
-          <Text style={[styles.manageBtnText, { color: themeColors.accent }]}>Manage modules</Text>
+          <Text style={[styles.manageBtnText, { color: themeColors.accent }]}>Modules</Text>
         </Pressable>
         <Pressable style={styles.manageBtn} onPress={() => router.push('/routines')}>
           <Feather name="layers" size={16} color={themeColors.accent} />
           <Text style={[styles.manageBtnText, { color: themeColors.accent }]}>Routines</Text>
         </Pressable>
-        <Pressable style={styles.manageBtn} onPress={() => router.push('/layout-editor')}>
-          <Feather name="grid" size={16} color={themeColors.accent} />
-          <Text style={[styles.manageBtnText, { color: themeColors.accent }]}>Edit Layout</Text>
+        <Pressable style={styles.manageBtn} onPress={() => router.push('/statistics')}>
+          <Feather name="bar-chart-2" size={16} color={themeColors.accent} />
+          <Text style={[styles.manageBtnText, { color: themeColors.accent }]}>Statistics</Text>
+        </Pressable>
+        <Pressable style={styles.manageBtn} onPress={() => router.push('/gallery')}>
+          <Feather name="image" size={16} color={themeColors.accent} />
+          <Text style={[styles.manageBtnText, { color: themeColors.accent }]}>Gallery</Text>
         </Pressable>
       </View>
     </ScreenWrapper>
@@ -396,5 +432,29 @@ const styles = StyleSheet.create({
   emptyLink: {
     fontSize: fontSize.sm,
     fontWeight: '500',
+  },
+  quickStatsBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-evenly',
+    borderRadius: borderRadius.lg,
+    paddingVertical: spacing.md,
+    marginBottom: spacing.md,
+  },
+  quickStat: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  quickStatValue: {
+    fontSize: fontSize.xl,
+    fontWeight: '700',
+  },
+  quickStatLabel: {
+    fontSize: fontSize.xs,
+    marginTop: 2,
+  },
+  quickStatDivider: {
+    width: 1,
+    height: 32,
   },
 });

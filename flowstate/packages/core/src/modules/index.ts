@@ -18,4 +18,6 @@ export type {
   StreakCounterConfig,
   TallyConfig,
   PhotoLogConfig,
+  RoutineLauncherConfig,
+  TimerModuleConfig,
 } from '../types/ModuleSpec';

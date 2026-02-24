@@ -2,6 +2,7 @@ import { eq, and, desc, asc, gte, lte, inArray, sql } from 'drizzle-orm';
 import type { SqliteRemoteDatabase } from 'drizzle-orm/sqlite-proxy';
 import type { ParsedCSVRow } from '../csv/parser';
 import {
+  collections,
   routines,
   routineBlocks,
   plans,
@@ -235,6 +236,7 @@ export async function getModuleSpecs(db: DB) {
     ...r,
     config: JSON.parse(r.config),
     placements: JSON.parse(r.placements),
+    metadata: JSON.parse(r.metadata || '{}'),
   }));
 }
 
@@ -242,7 +244,12 @@ export async function getModuleSpec(db: DB, id: string) {
   const rows = await db.select().from(moduleSpecs).where(eq(moduleSpecs.id, id));
   const r = rows[0];
   if (!r) return null;
-  return { ...r, config: JSON.parse(r.config), placements: JSON.parse(r.placements) };
+  return {
+    ...r,
+    config: JSON.parse(r.config),
+    placements: JSON.parse(r.placements),
+    metadata: JSON.parse(r.metadata || '{}'),
+  };
 }
 
 export async function createModuleSpec(
@@ -257,6 +264,8 @@ export async function createModuleSpec(
     isLive: boolean;
     required: boolean;
     showInSummary?: boolean;
+    collectionId?: string | null;
+    metadata?: Record<string, unknown>;
   },
 ) {
   const now = nowISO();
@@ -264,6 +273,8 @@ export async function createModuleSpec(
     ...data,
     config: JSON.stringify(data.config),
     placements: JSON.stringify(data.placements),
+    collectionId: data.collectionId ?? null,
+    metadata: JSON.stringify(data.metadata ?? {}),
     createdAt: now,
     updatedAt: now,
   });
@@ -281,6 +292,8 @@ export async function updateModuleSpec(
     isLive: boolean;
     required: boolean;
     showInSummary: boolean;
+    collectionId: string | null;
+    metadata: Record<string, unknown>;
     archivedAt: string | null;
   }>,
 ) {
@@ -292,6 +305,8 @@ export async function updateModuleSpec(
   if (data.isLive !== undefined) updateData.isLive = data.isLive;
   if (data.required !== undefined) updateData.required = data.required;
   if (data.showInSummary !== undefined) updateData.showInSummary = data.showInSummary;
+  if (data.collectionId !== undefined) updateData.collectionId = data.collectionId;
+  if (data.metadata !== undefined) updateData.metadata = JSON.stringify(data.metadata);
   if (data.archivedAt !== undefined) updateData.archivedAt = data.archivedAt;
 
   await db.update(moduleSpecs).set(updateData).where(eq(moduleSpecs.id, id));
@@ -358,17 +373,22 @@ export async function getSession(db: DB, id: string) {
 
 export async function createSession(
   db: DB,
-  data: { dayPlanId: string; routineId: string; routineName: string; scheduledTime?: string },
+  data: { dayPlanId: string; routineId: string; routineName: string; scheduledTime?: string; moduleId?: string; tags?: string[] },
 ) {
   const id = generateId();
   const now = nowISO();
   await db.insert(sessions).values({
     id,
-    ...data,
+    dayPlanId: data.dayPlanId,
+    routineId: data.routineId,
+    routineName: data.routineName,
+    moduleId: data.moduleId ?? null,
     scheduledTime: data.scheduledTime ?? null,
     status: 'pending',
     totalPausedMs: 0,
     currentBlockIndex: 0,
+    tags: JSON.stringify(data.tags ?? []),
+    photos: JSON.stringify([]),
     createdAt: now,
     updatedAt: now,
   });
@@ -382,14 +402,31 @@ export async function updateSession(
     status: string;
     scheduledTime: string;
     startedAt: string;
-    endedAt: string;
+    endedAt: string | null;
     totalPausedMs: number;
     currentBlockIndex: number;
     routineId: string;
     routineName: string;
+    moduleId: string;
+    tags: string[];
+    photos: string[];
+    notes: string;
   }>,
 ) {
-  await db.update(sessions).set({ ...data, updatedAt: nowISO() }).where(eq(sessions.id, id));
+  const updateData: Record<string, unknown> = { updatedAt: nowISO() };
+  if (data.status !== undefined) updateData.status = data.status;
+  if (data.scheduledTime !== undefined) updateData.scheduledTime = data.scheduledTime;
+  if (data.startedAt !== undefined) updateData.startedAt = data.startedAt;
+  if ('endedAt' in data) updateData.endedAt = data.endedAt;
+  if (data.totalPausedMs !== undefined) updateData.totalPausedMs = data.totalPausedMs;
+  if (data.currentBlockIndex !== undefined) updateData.currentBlockIndex = data.currentBlockIndex;
+  if (data.routineId !== undefined) updateData.routineId = data.routineId;
+  if (data.routineName !== undefined) updateData.routineName = data.routineName;
+  if (data.moduleId !== undefined) updateData.moduleId = data.moduleId;
+  if (data.tags !== undefined) updateData.tags = JSON.stringify(data.tags);
+  if (data.photos !== undefined) updateData.photos = JSON.stringify(data.photos);
+  if (data.notes !== undefined) updateData.notes = data.notes;
+  await db.update(sessions).set(updateData).where(eq(sessions.id, id));
 }
 
 export async function deleteSession(db: DB, id: string) {
@@ -583,4 +620,123 @@ export async function getSessionCountsByDayPlanIds(db: DB, dayPlanIds: string[])
     result[row.dayPlanId] = row.count;
   }
   return result;
+}
+
+// ─── Collections ────────────────────────────────────────────────
+
+export async function getCollections(db: DB, parentId?: string | null) {
+  if (parentId === undefined) {
+    return db.select().from(collections).orderBy(asc(collections.name));
+  }
+  if (parentId === null) {
+    // Root-level collections (no parent)
+    const all = await db.select().from(collections).orderBy(asc(collections.name));
+    return all.filter((c: any) => !c.parentId);
+  }
+  return db.select().from(collections).where(eq(collections.parentId, parentId)).orderBy(asc(collections.name));
+}
+
+export async function getCollection(db: DB, id: string) {
+  const rows = await db.select().from(collections).where(eq(collections.id, id));
+  return rows[0] ?? null;
+}
+
+export async function createCollection(
+  db: DB,
+  data: { name: string; emoji?: string; parentId?: string | null; type?: 'module' | 'routine' },
+) {
+  const id = generateId();
+  const now = nowISO();
+  await db.insert(collections).values({
+    id,
+    name: data.name,
+    emoji: data.emoji ?? null,
+    parentId: data.parentId ?? null,
+    type: data.type ?? 'module',
+    createdAt: now,
+    updatedAt: now,
+  });
+  return id;
+}
+
+export async function updateCollection(
+  db: DB,
+  id: string,
+  data: Partial<{ name: string; emoji: string; parentId: string | null; type: 'module' | 'routine' }>,
+) {
+  await db.update(collections).set({ ...data, updatedAt: nowISO() }).where(eq(collections.id, id));
+}
+
+export async function deleteCollection(db: DB, id: string) {
+  // Unlink modules in this collection
+  await db.update(moduleSpecs).set({ collectionId: null }).where(eq(moduleSpecs.collectionId, id));
+  // Unlink routines in this collection
+  await db.update(routines).set({ collectionId: null }).where(eq(routines.collectionId, id));
+  // Re-parent child collections to root
+  await db.update(collections).set({ parentId: null }).where(eq(collections.parentId, id));
+  await db.delete(collections).where(eq(collections.id, id));
+}
+
+// ─── Timer Module Session Creation ──────────────────────────────
+
+/**
+ * When a timer module finishes, auto-insert a session record linked to the moduleId.
+ */
+export async function createTimerSession(
+  db: DB,
+  data: {
+    dayPlanId: string;
+    moduleId: string;
+    moduleName: string;
+    durationMs: number;
+    tags?: string[];
+  },
+) {
+  const id = generateId();
+  const now = nowISO();
+  const startedAt = new Date(Date.now() - data.durationMs).toISOString();
+  await db.insert(sessions).values({
+    id,
+    dayPlanId: data.dayPlanId,
+    routineId: data.moduleId, // reuse routineId field for the module reference
+    routineName: data.moduleName,
+    moduleId: data.moduleId,
+    status: 'completed',
+    startedAt,
+    endedAt: now,
+    totalPausedMs: 0,
+    currentBlockIndex: 0,
+    tags: JSON.stringify(data.tags ?? []),
+    photos: JSON.stringify([]),
+    createdAt: now,
+    updatedAt: now,
+  });
+  return id;
+}
+
+// ─── Session Photos ─────────────────────────────────────────────
+
+export async function addSessionPhoto(db: DB, sessionId: string, photoUri: string) {
+  const session = await getSession(db, sessionId);
+  if (!session) return;
+  const photos: string[] = JSON.parse(session.photos || '[]');
+  photos.push(photoUri);
+  await db.update(sessions).set({ photos: JSON.stringify(photos), updatedAt: nowISO() }).where(eq(sessions.id, sessionId));
+}
+
+export async function getSessionPhotos(db: DB, moduleId?: string): Promise<Array<{ sessionId: string; uri: string; date: string }>> {
+  let allSessions: any[];
+  if (moduleId) {
+    allSessions = await db.select().from(sessions).where(eq(sessions.moduleId, moduleId));
+  } else {
+    allSessions = await db.select().from(sessions);
+  }
+  const results: Array<{ sessionId: string; uri: string; date: string }> = [];
+  for (const s of allSessions) {
+    const photos: string[] = JSON.parse(s.photos || '[]');
+    for (const uri of photos) {
+      results.push({ sessionId: s.id, uri, date: s.startedAt ?? s.createdAt });
+    }
+  }
+  return results;
 }

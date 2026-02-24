@@ -106,7 +106,7 @@ export default function CreateRoutineScreen() {
           order: i,
         });
       }
-      router.back();
+      router.canGoBack() ? router.back() : router.replace('/(tabs)');
     } catch (e) {
       console.error('Failed to save routine:', e);
       Alert.alert('Error', 'Failed to save routine.');

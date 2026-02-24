@@ -66,7 +66,7 @@ export default function EditModuleScreen() {
         const spec = await getModuleSpec(db, id);
         if (!spec) {
           Alert.alert('Error', 'Module not found');
-          router.back();
+          router.canGoBack() ? router.back() : router.replace('/(tabs)');
           return;
         }
 
@@ -93,7 +93,7 @@ export default function EditModuleScreen() {
       } catch (err) {
         console.error('Failed to load module for editing:', err);
         Alert.alert('Error', 'Failed to load module');
-        router.back();
+        router.canGoBack() ? router.back() : router.replace('/(tabs)');
       } finally {
         setLoading(false);
       }
@@ -189,7 +189,7 @@ export default function EditModuleScreen() {
         isLive,
         required,
       });
-      router.back();
+      router.canGoBack() ? router.back() : router.replace('/(tabs)');
     } catch (err) {
       console.error('Failed to update module:', err);
       Alert.alert('Error', 'Failed to save changes. Please try again.');

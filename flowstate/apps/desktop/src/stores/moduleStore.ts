@@ -11,6 +11,8 @@ interface ModuleSpecEntry {
   isLive: boolean;
   required: boolean;
   showInSummary?: boolean;
+  collectionId?: string | null;
+  metadata?: Record<string, unknown>;
   archivedAt?: string | null;
 }
 

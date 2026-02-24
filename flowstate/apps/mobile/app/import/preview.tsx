@@ -151,7 +151,7 @@ export default function ImportPreviewScreen() {
 
       {/* Action Buttons */}
       <View style={styles.actions}>
-        <Pressable style={[styles.cancelBtn, { borderColor: themeColors.border }]} onPress={() => router.back()}>
+        <Pressable style={[styles.cancelBtn, { borderColor: themeColors.border }]} onPress={() => router.canGoBack() ? router.back() : router.replace('/(tabs)')}>
           <Text style={[styles.cancelBtnText, { color: themeColors.text }]}>Cancel</Text>
         </Pressable>
 

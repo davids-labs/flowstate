@@ -70,6 +70,24 @@ export function HourlyTimeline({
     })
     .filter(Boolean) as (TimelineSession & { startH: number })[];
 
+  // Calculate free-time gaps between sessions (> 15 minutes)
+  interface GapBlock {
+    startH: number;
+    durationMinutes: number;
+  }
+  const gaps: GapBlock[] = [];
+  if (placedSessions.length > 0) {
+    const sorted = [...placedSessions].sort((a, b) => a.startH - b.startH);
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const endOfCurrent = sorted[i].startH + sorted[i].durationMinutes / 60;
+      const startOfNext = sorted[i + 1].startH;
+      const gapMinutes = (startOfNext - endOfCurrent) * 60;
+      if (gapMinutes > 15) {
+        gaps.push({ startH: endOfCurrent, durationMinutes: Math.round(gapMinutes) });
+      }
+    }
+  }
+
   // Sessions without a time
   const unplacedSessions = sessions.filter((s) => getSessionStartHour(s) === null);
 
@@ -120,6 +138,37 @@ export function HourlyTimeline({
                 {s.blockCount ? ` · ${s.blockCount} blocks` : ''}
               </Text>
             </Pressable>
+          );
+        })}
+
+        {/* Free Time gap blocks */}
+        {gaps.map((gap, i) => {
+          const top = (gap.startH - startHour) * HOUR_HEIGHT;
+          const height = Math.max((gap.durationMinutes / 60) * HOUR_HEIGHT, 24);
+          const hours = Math.floor(gap.durationMinutes / 60);
+          const mins = gap.durationMinutes % 60;
+          const durationLabel = hours > 0
+            ? `${hours}h ${mins > 0 ? `${mins}m` : ''}`
+            : `${mins}m`;
+
+          return (
+            <View
+              key={`gap-${i}`}
+              style={[
+                styles.gapBlock,
+                {
+                  top,
+                  height,
+                  borderLeftColor: themeColors.border,
+                  backgroundColor: themeColors.background,
+                },
+              ]}
+            >
+              <Feather name="clock" size={12} color={themeColors.muted} />
+              <Text style={[styles.gapText, { color: themeColors.muted }]}>
+                Free Time · {durationLabel}
+              </Text>
+            </View>
           );
         })}
       </View>
@@ -180,6 +229,23 @@ const styles = StyleSheet.create({
     padding: spacing.sm,
     justifyContent: 'center',
     overflow: 'hidden',
+  },
+  gapBlock: {
+    position: 'absolute',
+    left: 4,
+    right: 0,
+    borderLeftWidth: 2,
+    borderRadius: borderRadius.sm,
+    borderStyle: 'dashed' as any,
+    paddingHorizontal: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    overflow: 'hidden',
+  },
+  gapText: {
+    fontSize: fontSize.xs,
+    fontWeight: '500',
   },
   sessionName: {
     fontSize: fontSize.sm,

@@ -63,7 +63,7 @@ export default function EditRoutineScreen() {
       const routine = await getRoutine(db, id);
       if (!routine) {
         Alert.alert('Not found', 'Routine not found.');
-        router.back();
+        router.canGoBack() ? router.back() : router.replace('/(tabs)');
         return;
       }
       setName(routine.name);
@@ -172,7 +172,7 @@ export default function EditRoutineScreen() {
         }
       }
 
-      router.back();
+      router.canGoBack() ? router.back() : router.replace('/(tabs)');
     } catch (e) {
       console.error('Failed to update routine:', e);
       Alert.alert('Error', 'Failed to save changes.');

@@ -6,7 +6,7 @@ import * as Haptics from 'expo-haptics';
 import { ScreenWrapper } from '../../components/layout/ScreenWrapper';
 import { SectionHeader } from '../../components/layout/SectionHeader';
 import UndoToast from '../../components/shared/UndoToast';
-import { getModuleSpecs, deleteModuleSpec, updateModuleSpec } from '@flowstate/core';
+import { getModuleSpecs, getCollections, deleteModuleSpec, updateModuleSpec } from '@flowstate/core';
 import { useDatabaseSafe } from '../../components/DatabaseProvider';
 import { fontSize, spacing, borderRadius } from '../../constants/theme';
 import { useTheme } from '../../constants/ThemeContext';
@@ -24,8 +24,17 @@ const TYPE_LABELS: Record<string, string> = {
   tally: 'Tally',
   photo_log: 'Photo Log',
   routine_launcher: 'Routine Launcher',
+  timer: 'Timer',
   group: 'Group',
 };
+
+interface CollectionRow {
+  id: string;
+  name: string;
+  emoji?: string | null;
+  parentId?: string | null;
+  type: string;
+}
 
 interface ModuleRow {
   id: string;
@@ -35,6 +44,7 @@ interface ModuleRow {
   isLive: boolean;
   required: boolean;
   placements: string[];
+  collectionId?: string | null;
   archivedAt?: string | null;
 }
 
@@ -42,12 +52,22 @@ export default function ModulesScreen() {
   const router = useRouter();
   const { db, isReady } = useDatabaseSafe();
   const [modules, setModules] = useState<ModuleRow[]>([]);
+  const [allCollections, setAllCollections] = useState<CollectionRow[]>([]);
+  const [folderStack, setFolderStack] = useState<Array<{ id: string | null; name: string }>>([
+    { id: null, name: 'Modules' },
+  ]);
   const { themeColors } = useTheme();
 
-  const loadModules = useCallback(async () => {
+  const currentFolderId = folderStack[folderStack.length - 1].id;
+  const currentFolderName = folderStack[folderStack.length - 1].name;
+
+  const loadData = useCallback(async () => {
     if (!db || !isReady) return;
     try {
-      const specs = await getModuleSpecs(db);
+      const [specs, cols] = await Promise.all([
+        getModuleSpecs(db),
+        getCollections(db),
+      ]);
       setModules(specs.map((s: any) => ({
         id: s.id,
         type: s.type,
@@ -56,16 +76,23 @@ export default function ModulesScreen() {
         isLive: !!s.isLive,
         required: !!s.required,
         placements: Array.isArray(s.placements) ? s.placements : [],
+        collectionId: s.collectionId ?? null,
         archivedAt: s.archivedAt,
+      })));
+      setAllCollections(cols.map((c: any) => ({
+        id: c.id,
+        name: c.name,
+        emoji: c.emoji,
+        parentId: c.parentId ?? null,
+        type: c.type,
       })));
     } catch (err) {
       console.error('Failed to load modules:', err);
     }
   }, [db, isReady]);
 
-  useFocusEffect(useCallback(() => { loadModules(); }, [loadModules]));
+  useFocusEffect(useCallback(() => { loadData(); }, [loadData]));
 
-  // Clear pending timeout on unmount to prevent stale DB writes
   useEffect(() => {
     return () => {
       if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current);
@@ -91,7 +118,7 @@ export default function ModulesScreen() {
         try { await updateModuleSpec(db, id, { archivedAt: new Date().toISOString() }); } catch (e) { console.error('Archive failed:', e); }
       }, 3200);
     } else {
-      try { await updateModuleSpec(db, id, { archivedAt: null }); loadModules(); } catch (e) { console.error('Restore failed:', e); }
+      try { await updateModuleSpec(db, id, { archivedAt: null }); loadData(); } catch (e) { console.error('Restore failed:', e); }
     }
   };
 
@@ -112,11 +139,49 @@ export default function ModulesScreen() {
     }, 3200);
   };
 
-  const active = modules.filter(m => !m.archivedAt);
+  // Filter: show folders and modules for the current nesting level
+  const visibleFolders = allCollections.filter(c =>
+    currentFolderId === null ? !c.parentId : c.parentId === currentFolderId,
+  );
+  const visibleModules = modules.filter(m =>
+    !m.archivedAt && (currentFolderId === null ? !m.collectionId : m.collectionId === currentFolderId),
+  );
   const archived = modules.filter(m => !!m.archivedAt);
 
-  const renderItem = ({ item }: { item: ModuleRow }) => (
+  const enterFolder = (folder: CollectionRow) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setFolderStack(prev => [...prev, { id: folder.id, name: folder.name }]);
+  };
+
+  const goBack = () => {
+    if (folderStack.length > 1) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      setFolderStack(prev => prev.slice(0, -1));
+    }
+  };
+
+  const renderFolderItem = (folder: CollectionRow) => (
     <Pressable
+      key={folder.id}
+      style={[styles.moduleRow, { backgroundColor: themeColors.surface }]}
+      onPress={() => enterFolder(folder)}
+    >
+      <Text style={styles.emoji}>{folder.emoji ?? '📁'}</Text>
+      <View style={styles.moduleInfo}>
+        <Text style={[styles.moduleLabel, { color: themeColors.text }]}>{folder.name}</Text>
+        <View style={styles.badges}>
+          <View style={[styles.typeBadge, { backgroundColor: themeColors.accentLight }]}>
+            <Text style={[styles.typeBadgeText, { color: themeColors.accent }]}>Collection</Text>
+          </View>
+        </View>
+      </View>
+      <Feather name="chevron-right" size={18} color={themeColors.muted} />
+    </Pressable>
+  );
+
+  const renderModuleItem = (item: ModuleRow) => (
+    <Pressable
+      key={item.id}
       style={[styles.moduleRow, { backgroundColor: themeColors.surface }]}
       onPress={() => router.push(`/modules/${item.id}`)}
       onLongPress={() => {
@@ -127,11 +192,7 @@ export default function ModulesScreen() {
           [
             { text: 'Cancel', style: 'cancel' },
             { text: 'Archive', onPress: () => handleArchive(item.id, false) },
-            {
-              text: 'Delete',
-              style: 'destructive',
-              onPress: () => handleDelete(item.id),
-            },
+            { text: 'Delete', style: 'destructive', onPress: () => handleDelete(item.id) },
           ],
         );
       }}
@@ -165,19 +226,41 @@ export default function ModulesScreen() {
 
   return (
     <ScreenWrapper>
-      <SectionHeader title="Modules" subtitle={`${active.length} active`} />
+      {/* Breadcrumb / Back navigation */}
+      {folderStack.length > 1 && (
+        <Pressable style={styles.backRow} onPress={goBack}>
+          <Feather name="arrow-left" size={18} color={themeColors.accent} />
+          <Text style={[styles.backText, { color: themeColors.accent }]}>
+            {folderStack[folderStack.length - 2].name}
+          </Text>
+        </Pressable>
+      )}
 
-      {active.length === 0 && (
+      <SectionHeader
+        title={currentFolderName}
+        subtitle={`${visibleFolders.length} folders · ${visibleModules.length} modules`}
+      />
+
+      {visibleFolders.length === 0 && visibleModules.length === 0 && (
         <View style={styles.emptyState}>
           <Feather name="box" size={40} color={themeColors.muted} />
-          <Text style={[styles.emptyText, { color: themeColors.text }]}>No modules yet</Text>
-          <Text style={[styles.emptySubtext, { color: themeColors.muted }]}>Create your first module to start tracking</Text>
+          <Text style={[styles.emptyText, { color: themeColors.text }]}>
+            {currentFolderId ? 'Empty folder' : 'No modules yet'}
+          </Text>
+          <Text style={[styles.emptySubtext, { color: themeColors.muted }]}>
+            {currentFolderId ? 'Add modules to this collection' : 'Create your first module to start tracking'}
+          </Text>
         </View>
       )}
 
-      {active.map(item => <React.Fragment key={item.id}>{renderItem({ item })}</React.Fragment>)}
+      {/* Folders first */}
+      {visibleFolders.map(renderFolderItem)}
 
-      {archived.length > 0 && (
+      {/* Then modules */}
+      {visibleModules.map(renderModuleItem)}
+
+      {/* Archived (only at root) */}
+      {currentFolderId === null && archived.length > 0 && (
         <>
           <SectionHeader title="Archived" subtitle={`${archived.length} modules`} />
           {archived.map(item => (
@@ -219,6 +302,17 @@ export default function ModulesScreen() {
 }
 
 const styles = StyleSheet.create({
+  backRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.xs,
+  },
+  backText: {
+    fontSize: fontSize.md,
+    fontWeight: '500',
+  },
   moduleRow: {
     flexDirection: 'row',
     alignItems: 'center',

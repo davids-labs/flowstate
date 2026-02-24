@@ -37,3 +37,78 @@ export async function readWidgetSnapshot(): Promise<WidgetSnapshot | null> {
     return null;
   }
 }
+
+// ─── Weekly Stats Widget ────────────────────────────────────────
+
+const WEEKLY_STATS_KEY = '@flowstate/widget-weekly-stats';
+
+export interface WeeklyStatsSnapshot {
+  weekDays: { label: string; count: number }[];
+  maxCount: number;
+  weekTotal: number;
+  streakCount: number;
+  updatedAt: string;
+}
+
+export async function saveWeeklyStatsSnapshot(data: Omit<WeeklyStatsSnapshot, 'updatedAt'>): Promise<void> {
+  try {
+    await AsyncStorage.setItem(WEEKLY_STATS_KEY, JSON.stringify({ ...data, updatedAt: new Date().toISOString() }));
+  } catch {}
+}
+
+export async function readWeeklyStatsSnapshot(): Promise<WeeklyStatsSnapshot | null> {
+  try {
+    const raw = await AsyncStorage.getItem(WEEKLY_STATS_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+// ─── Quick Log Widget ───────────────────────────────────────────
+
+const QUICK_LOG_KEY = '@flowstate/widget-quick-log';
+
+export interface QuickLogSnapshot {
+  modules: { id: string; label: string; emoji?: string; logged?: boolean }[];
+  updatedAt: string;
+}
+
+export async function saveQuickLogSnapshot(data: Omit<QuickLogSnapshot, 'updatedAt'>): Promise<void> {
+  try {
+    await AsyncStorage.setItem(QUICK_LOG_KEY, JSON.stringify({ ...data, updatedAt: new Date().toISOString() }));
+  } catch {}
+}
+
+export async function readQuickLogSnapshot(): Promise<QuickLogSnapshot | null> {
+  try {
+    const raw = await AsyncStorage.getItem(QUICK_LOG_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+// ─── Goal Progress Widget ───────────────────────────────────────
+
+const GOAL_PROGRESS_KEY = '@flowstate/widget-goal-progress';
+
+export interface GoalProgressSnapshot {
+  goals: {
+    label: string;
+    emoji?: string;
+    progressPercent: number;
+    daysRemaining: number;
+    isAhead: boolean;
+  }[];
+  updatedAt: string;
+}
+
+export async function saveGoalProgressSnapshot(data: Omit<GoalProgressSnapshot, 'updatedAt'>): Promise<void> {
+  try {
+    await AsyncStorage.setItem(GOAL_PROGRESS_KEY, JSON.stringify({ ...data, updatedAt: new Date().toISOString() }));
+  } catch {}
+}
+
+export async function readGoalProgressSnapshot(): Promise<GoalProgressSnapshot | null> {
+  try {
+    const raw = await AsyncStorage.getItem(GOAL_PROGRESS_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
