@@ -1,135 +1,162 @@
-# Turborepo starter
+# FlowState
 
-This Turborepo starter is maintained by the Turborepo core team.
+A structured daily planning & habit tracking app. Plan days, run timed sessions, track modules (countdowns, checkboxes, ratings, data inputs, streaks), and review weekly analytics — all from your phone or desktop.
 
-## Using this example
-
-Run the following command:
-
-```sh
-npx create-turbo@latest
-```
-
-## What's inside?
-
-This Turborepo includes the following packages/apps:
-
-### Apps and Packages
-
-- `docs`: a [Next.js](https://nextjs.org/) app
-- `web`: another [Next.js](https://nextjs.org/) app
-- `@repo/ui`: a stub React component library shared by both `web` and `docs` applications
-- `@repo/eslint-config`: `eslint` configurations (includes `eslint-config-next` and `eslint-config-prettier`)
-- `@repo/typescript-config`: `tsconfig.json`s used throughout the monorepo
-
-Each package/app is 100% [TypeScript](https://www.typescriptlang.org/).
-
-### Utilities
-
-This Turborepo has some additional tools already setup for you:
-
-- [TypeScript](https://www.typescriptlang.org/) for static type checking
-- [ESLint](https://eslint.org/) for code linting
-- [Prettier](https://prettier.io) for code formatting
-
-### Build
-
-To build all apps and packages, run the following command:
+## Architecture
 
 ```
-cd my-turborepo
-
-# With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended)
-turbo build
-
-# Without [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation), use your package manager
-npx turbo build
-yarn dlx turbo build
-pnpm exec turbo build
+flowstate/
+├── apps/
+│   ├── mobile/      Expo React Native (SDK 54) + expo-router
+│   └── desktop/     Vite + React + Electron
+├── packages/
+│   └── core/        Shared logic: DB, types, timer, CSV, Firebase, analytics, narrative
+├── turbo.json       Turborepo config
+└── package.json     npm workspaces root
 ```
 
-You can build a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
+## Tech Stack
 
-```
-# With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended)
-turbo build --filter=docs
+| Layer | Tech |
+|-------|------|
+| Mobile | Expo SDK 54, React Native 0.81, expo-router 6 |
+| Desktop | Vite, React 19, Electron |
+| Database | expo-sqlite + Drizzle ORM (mobile), better-sqlite3 (desktop) |
+| State | Zustand 5 |
+| Auth/Sync | Firebase 12 (Auth + Firestore) |
+| Charts | react-native-svg (custom sparklines) |
+| Build | Turborepo, TypeScript 5.9 |
 
-# Without [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation), use your package manager
-npx turbo build --filter=docs
-yarn exec turbo build --filter=docs
-pnpm exec turbo build --filter=docs
-```
+## Getting Started
 
-### Develop
+### Prerequisites
 
-To develop all apps and packages, run the following command:
+- Node.js 20+
+- npm 10+
+- [Expo Go](https://expo.dev/go) on your phone (for dev testing)
 
-```
-cd my-turborepo
+### Install
 
-# With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended)
-turbo dev
-
-# Without [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation), use your package manager
-npx turbo dev
-yarn exec turbo dev
-pnpm exec turbo dev
-```
-
-You can develop a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
-
-```
-# With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended)
-turbo dev --filter=web
-
-# Without [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation), use your package manager
-npx turbo dev --filter=web
-yarn exec turbo dev --filter=web
-pnpm exec turbo dev --filter=web
+```bash
+git clone <repo-url> && cd flowstate
+npm install
 ```
 
-### Remote Caching
+### Run Mobile (dev)
 
-> [!TIP]
-> Vercel Remote Cache is free for all plans. Get started today at [vercel.com](https://vercel.com/signup?/signup?utm_source=remote-cache-sdk&utm_campaign=free_remote_cache).
-
-Turborepo can use a technique known as [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching) to share cache artifacts across machines, enabling you to share build caches with your team and CI/CD pipelines.
-
-By default, Turborepo will cache locally. To enable Remote Caching you will need an account with Vercel. If you don't have an account you can [create one](https://vercel.com/signup?utm_source=turborepo-examples), then enter the following commands:
-
-```
-cd my-turborepo
-
-# With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended)
-turbo login
-
-# Without [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation), use your package manager
-npx turbo login
-yarn exec turbo login
-pnpm exec turbo login
+```bash
+cd apps/mobile
+npx expo start
 ```
 
-This will authenticate the Turborepo CLI with your [Vercel account](https://vercel.com/docs/concepts/personal-accounts/overview).
+Scan the QR code with Expo Go or press `w` for web.
 
-Next, you can link your Turborepo to your Remote Cache by running the following command from the root of your Turborepo:
+### Run Desktop (dev)
 
-```
-# With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended)
-turbo link
-
-# Without [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation), use your package manager
-npx turbo link
-yarn exec turbo link
-pnpm exec turbo link
+```bash
+cd apps/desktop
+npm run dev          # Vite dev server
+# In another terminal:
+npx electron .       # Electron window
 ```
 
-## Useful Links
+## Project Structure
 
-Learn more about the power of Turborepo:
+### `packages/core`
 
-- [Tasks](https://turborepo.dev/docs/crafting-your-repository/running-tasks)
-- [Caching](https://turborepo.dev/docs/crafting-your-repository/caching)
-- [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching)
-- [Filtering](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters)
-- [Configuration Options](https://turborepo.dev/docs/reference/configuration)
-- [CLI Usage](https://turborepo.dev/docs/reference/command-line-reference)
+Shared business logic imported by both apps as `@flowstate/core`.
+
+| Module | Purpose |
+|--------|---------|
+| `db/schema.ts` | Drizzle ORM table definitions (8 tables) |
+| `db/queries.ts` | Full CRUD: plans, day-plans, modules, sessions, CSV import |
+| `db/analytics.ts` | Aggregates: compliance rates, rating trends, session stats, streaks, plan progress |
+| `types/` | TypeScript types + Zod schemas for ModuleSpec, DayPlan, Session, TimerState |
+| `timer/TimerEngine.ts` | Timestamp-based timer with play/pause/resume/skip/end |
+| `csv/parser.ts` | Pure-JS RFC-4180 CSV parser (no Node.js deps) |
+| `firebase/` | Firebase Auth + Firestore sync |
+| `narrative/index.ts` | Template-based weekly summary text generator |
+
+### `apps/mobile`
+
+Expo Router file-based routing:
+
+| Route | Screen |
+|-------|--------|
+| `(tabs)/index` | Home — live modules, today snapshot, daily log |
+| `(tabs)/today` | Today checklist & modules |
+| `(tabs)/plan` | Plan view with progress analytics + heatmap |
+| `day/[date]` | Day detail — must-dos, modules, sessions, quiet day toggle |
+| `week/[weekId]` | Week summary — narrative, stats, compliance bars, trend charts |
+| `session/[id]` | Timer screen with SVG ring + block controls |
+| `modules/` | Module list, create wizard, detail pages |
+| `import/` | CSV import flow (pick → preview → success) |
+| `settings` | App settings — notifications, haptics, data management |
+
+### Module Types
+
+9 module types, each with its own card component:
+
+- **Countdown** — days until target date, with optional intention field
+- **Countup** — days since origin (standard or "last seen" variant)
+- **Checkbox** — daily yes/no toggle
+- **Rating** — 1–5 star scale
+- **Data Input** — numeric tracking with target
+- **Text Note** — free-text daily capture
+- **Progress Bar** — date-range visual progress
+- **Streak Counter** — consecutive completion tracker
+- **Group** — container for related modules
+
+## Analytics (Phase 6)
+
+The analytics layer (`packages/core/src/db/analytics.ts`) provides:
+
+- **Checkbox Compliance** — % of days each habit was checked
+- **Rating Trends** — averages with week-over-week trend direction
+- **Data Input Stats** — sum, average, days on target
+- **Session Completion** — completed/abandoned/pending with daily breakdown
+- **Streak Calculations** — current + best streaks
+- **Must-Do Stats** — daily completion rates
+- **Weekly Aggregate** — all of the above combined for a date range
+- **Plan Progress** — overall plan completion with heatmap data
+
+The narrative generator (`packages/core/src/narrative/`) turns weekly aggregates into a natural-language summary paragraph.
+
+## Building for Production
+
+### Mobile (EAS Build)
+
+```bash
+cd apps/mobile
+npx eas build --platform ios --profile production
+npx eas build --platform android --profile production
+```
+
+Config: `apps/mobile/eas.json`
+
+### Desktop (Electron)
+
+```bash
+cd apps/desktop
+npm run electron:build          # Current platform
+npm run electron:build:mac      # macOS
+npm run electron:build:win      # Windows
+npm run electron:build:linux    # Linux
+```
+
+Config: `apps/desktop/electron-builder.json`
+
+## Design System
+
+Minimalist Notion/Linear aesthetic with iOS polish:
+
+- **Colors**: Neutral-first palette, single accent (#2563EB)
+- **Typography**: System font, 7 size tokens (xs → hero)
+- **Spacing**: 6 tokens (xs=4 → xxl=48)
+- **Animation**: 150–220ms spring transitions
+- **Haptics**: Light for toggles, Medium for destructive actions
+- **Icons**: Feather set via @expo/vector-icons
+
+## License
+
+Private — all rights reserved.
