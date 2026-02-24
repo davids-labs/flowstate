@@ -60,6 +60,12 @@
     "web": {
       "favicon": "./assets/favicon.png",
       "bundler": "metro"
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "2f1700bd-3462-4b56-ab43-1169966df4fa"
+      }
+    },
+    "owner": "davids-labs"
   }
 }
