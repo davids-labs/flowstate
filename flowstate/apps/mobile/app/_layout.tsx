@@ -6,11 +6,13 @@ import { SyncProvider } from "../components/SyncProvider";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { ThemeProvider, useTheme } from "../constants/ThemeContext";
 import { scheduleDailyReminders } from "../services/notifications";
+import { initializeTimerStore } from "../stores/timerStore";
 
 export default function RootLayout() {
-  // Schedule daily reminder notifications on app startup
+  // Schedule daily reminder notifications and restore timer state on app startup
   useEffect(() => {
     scheduleDailyReminders().catch(() => {});
+    initializeTimerStore();
   }, []);
 
   return (

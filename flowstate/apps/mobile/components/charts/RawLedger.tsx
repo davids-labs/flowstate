@@ -116,7 +116,7 @@ export default function RawLedger({
       <FlatList
         data={entries}
         renderItem={renderItem}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item: { id: string }) => item.id}
         style={styles.list}
         onEndReached={hasMore ? onLoadMore : undefined}
         onEndReachedThreshold={0.3}

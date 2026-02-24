@@ -8,187 +8,343 @@ import {
   stopBackgroundTimer,
   saveBackgroundTimerState,
 } from '../services/notifications';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { AppState } from 'react-native';
+
+
+const TIMER_STATE_KEY = 'flowstate_timer_state';
+
+async function saveTimerState(state: any) {
+  try {
+    await AsyncStorage.setItem(TIMER_STATE_KEY, JSON.stringify(state));
+  } catch (error) {
+    console.error('Failed to save timer state:', error);
+  }
+}
+
+async function loadTimerState() {
+  try {
+    const value = await AsyncStorage.getItem(TIMER_STATE_KEY);
+    return value ? JSON.parse(value) : null;
+  } catch (error) {
+    console.error('Failed to load timer state:', error);
+    return null;
+  }
+}
+
+export async function initializeTimerStore() {
+  const persisted = await loadTimerState();
+  if (persisted && persisted.sessionId && persisted.blocks && persisted.startedAt) {
+    // Restore timer state
+    useTimerStore.getState().restore(
+      persisted.sessionId,
+      persisted.blocks,
+      persisted.routineName || '',
+      {
+        blockIndex: persisted.blockIndex || 0,
+        startedAt: persisted.startedAt,
+        totalPausedMs: persisted.totalPausedMs || 0,
+      }
+    );
+  }
+
+  // Set up AppState event listener for background/foreground handling
+  let lastAppState = AppState.currentState;
+  AppState.addEventListener('change', async (nextAppState) => {
+    const timerState = useTimerStore.getState();
+    console.log('[TimerStore] AppState changed:', lastAppState, '->', nextAppState, 'phase:', timerState.phase);
+    // If moving to background, update notification and background timer
+    if (lastAppState.match(/active|foreground/) && nextAppState.match(/inactive|background/)) {
+      if (timerState.phase === 'running' || timerState.phase === 'overdue') {
+        console.log('[TimerStore] App going to background, starting background timer/notification');
+        // TimerState does not have 'remaining', use getRemaining
+        const { getRemaining } = await import('@flowstate/core/src/types/TimerState');
+        const remaining = getRemaining(timerState);
+        await startBackgroundTimer(remaining, timerState.currentBlockName, timerState.routineName);
+      }
+    }
+    // If returning to foreground, clear notification and sync state
+    if (lastAppState.match(/inactive|background/) && nextAppState.match(/active|foreground/)) {
+      console.log('[TimerStore] App returning to foreground, stopping background timer/notification');
+      await stopBackgroundTimer();
+      if (timerState.phase === 'running' || timerState.phase === 'overdue') {
+        useTimerStore.getState().tick();
+      }
+    }
+    lastAppState = nextAppState;
+  });
+}
 
 interface TimerBlock {
   name: string;
   durationMinutes: number;
 }
 
-interface TimerStoreState {
+
+type TimerStoreState = TimerState & {
   // State
-  phase: TimerPhase;
-  remaining: number; // ms
-  elapsed: number; // ms
-  progress: number; // 0..1
-  blockIndex: number;
-  totalBlocks: number;
-  isOverdue: boolean;
-  sessionId: string | null;
   blocks: TimerBlock[];
   currentBlockName: string;
   routineName: string;
-  pausedAt: number | null; // timestamp when paused
-  blockDurationMs: number; // current block total duration
-
   // Actions
   init: (sessionId: string, blocks: TimerBlock[], routineName?: string) => void;
-  restore: (sessionId: string, blocks: TimerBlock[], routineName: string, opts: {
-    blockIndex: number;
-    startedAt: number;
-    totalPausedMs: number;
-  }) => void;
+  restore: (
+    sessionId: string,
+    blocks: TimerBlock[],
+    routineName: string,
+    opts: {
+      blockIndex: number;
+      startedAt: number;
+      totalPausedMs: number;
+    }
+  ) => void;
   play: () => void;
   pause: () => void;
   resume: () => void;
   skip: () => void;
   end: () => void;
   tick: () => void;
-
+  set: (partial: Partial<TimerStoreState>) => void;
   // Internal
   _engine: TimerEngine;
   _intervalId: ReturnType<typeof setInterval> | null;
   _notifCounter: number;
-}
+};
+
 
 const engine = new TimerEngine();
+let intervalId: ReturnType<typeof setInterval> | null = null;
 
-export const useTimerStore = create<TimerStoreState>((set, get) => {
-  // Sync Zustand state from engine
-  const syncFromEngine = () => {
-    const e = get()._engine;
-    const blocks = get().blocks;
-    set({
-      phase: e.phase,
-      remaining: e.remaining,
-      elapsed: e.elapsed,
-      progress: e.progress,
-      blockIndex: e.state.blockIndex,
-      totalBlocks: e.state.totalBlocks,
-      isOverdue: e.isOverdue,
-      sessionId: e.state.sessionId,
-      currentBlockName: blocks[e.state.blockIndex]?.name ?? '',
-      pausedAt: e.state.pausedAt,
-      blockDurationMs: e.state.blockDurationMs,
-    });
-  };
+// Sync Zustand state with TimerEngine on every state change
+function subscribeToEngine(set: any) {
+  engine.onChange((engineState) => {
+    set((state: any) => ({
+      ...state,
+      phase: engine.phase,
+      startedAt: engineState.startedAt,
+      pausedAt: engineState.pausedAt,
+      totalPausedMs: engineState.totalPausedMs,
+      blockDurationMs: engineState.blockDurationMs,
+      blockIndex: engineState.blockIndex,
+      totalBlocks: engineState.totalBlocks,
+      elapsed: engine.elapsed,
+    }));
+  });
+}
 
-  const updateNotification = () => {
-    const state = get();
-    // Only update notification every ~1 second (every 4th tick at 250ms interval)
-    const counter = (state._notifCounter + 1) % 4;
-    set({ _notifCounter: counter });
-    if (counter !== 0) return;
+function startTicking(set: any) {
+  if (intervalId) clearInterval(intervalId);
+  intervalId = setInterval(() => {
+    engine.tick();
+    set((state: any) => ({
+      ...state,
+      phase: engine.phase,
+      elapsed: engine.elapsed,
+    }));
+  }, 1000);
+}
 
-    if (state.phase === 'running' || state.phase === 'overdue') {
-      showTimerNotification(
-        state.remaining,
-        state.currentBlockName,
-        state.routineName,
-      ).catch(() => {});
-    }
-  };
+function stopTicking() {
+  if (intervalId) {
+    clearInterval(intervalId);
+    intervalId = null;
+  }
+}
 
-  const startTicking = () => {
-    const existing = get()._intervalId;
-    if (existing) clearInterval(existing);
-    const id = setInterval(() => {
-      const e = get()._engine;
-      e.tick();
-      syncFromEngine();
-      updateNotification();
-    }, 250); // tick 4 times per second for smooth UI
-    set({ _intervalId: id });
-  };
-
-  const stopTicking = () => {
-    const id = get()._intervalId;
-    if (id) {
-      clearInterval(id);
-      set({ _intervalId: null });
-    }
-  };
-
+export const useTimerStore = create<TimerStoreState>((set) => {
+  // Subscribe Zustand to TimerEngine changes
+  subscribeToEngine(set);
   return {
-    phase: 'idle',
-    remaining: 0,
-    elapsed: 0,
-    progress: 0,
+    phase: 'idle' as TimerPhase,
+    pausedAt: null,
+    startedAt: null,
+    totalPausedMs: 0,
+    blockDurationMs: 0,
     blockIndex: 0,
     totalBlocks: 0,
-    isOverdue: false,
+    elapsed: 0,
     sessionId: null,
     blocks: [],
     currentBlockName: '',
     routineName: '',
-    pausedAt: null,
-    blockDurationMs: 0,
+    set,
     _engine: engine,
     _intervalId: null,
     _notifCounter: 0,
-
+    // Timer actions (empty implementations for now)
     init: (sessionId: string, blocks: TimerBlock[], routineName?: string) => {
-      stopTicking();
+      console.log('[TimerStore] init', { sessionId, blocks, routineName });
       engine.init({ sessionId, blocks });
-      set({ blocks, routineName: routineName ?? '' });
-      syncFromEngine();
-    },
-
-    restore: (sessionId, blocks, routineName, opts) => {
-      stopTicking();
-      engine.restore({
+      set((state) => ({
+        ...state,
         sessionId,
         blocks,
-        blockIndex: opts.blockIndex,
-        startedAt: opts.startedAt,
-        totalPausedMs: opts.totalPausedMs,
-      });
-      set({ blocks, routineName });
-      syncFromEngine();
+        routineName: routineName || '',
+        blockIndex: 0,
+        totalBlocks: blocks.length,
+        startedAt: null,
+        pausedAt: null,
+        totalPausedMs: 0,
+        blockDurationMs: blocks[0]?.durationMinutes ? blocks[0].durationMinutes * 60 * 1000 : 0,
+        phase: 'idle' as TimerPhase,
+        elapsed: 0,
+        currentBlockName: blocks[0]?.name || '',
+      }));
     },
+  restore: (
+    sessionId: string,
+    blocks: TimerBlock[],
+    routineName: string,
+    opts: {
+      blockIndex: number;
+      startedAt: number;
+      totalPausedMs: number;
+    }
+  ) => {
+    console.log('[TimerStore] restore', { sessionId, blocks, routineName, opts });
+    set((state) => ({
+      sessionId,
+      blocks,
+      routineName,
+      blockIndex: opts.blockIndex,
+      startedAt: opts.startedAt,
+      totalPausedMs: opts.totalPausedMs,
+      pausedAt: null,
+      phase: 'paused',
+    }));
 
-    play: () => {
-      engine.play();
-      startTicking();
-      const s = get();
-      startBackgroundTimer(s.remaining, s.currentBlockName || 'Focus', s.routineName).catch(() => {});
-      syncFromEngine();
-    },
-
-    pause: () => {
-      engine.pause();
-      stopTicking();
-      stopBackgroundTimer().catch(() => {});
-      syncFromEngine();
-    },
-
-    resume: () => {
-      engine.resume();
-      startTicking();
-      const s = get();
-      startBackgroundTimer(s.remaining, s.currentBlockName || 'Focus', s.routineName).catch(() => {});
-      syncFromEngine();
-    },
-
-    skip: () => {
-      const blocks = get().blocks;
-      engine.skip(blocks);
-      syncFromEngine();
-      if (engine.phase === 'completed') {
+    engine.restore({
+      sessionId,
+      blocks,
+      blockIndex: opts.blockIndex,
+      startedAt: opts.startedAt,
+      totalPausedMs: opts.totalPausedMs,
+    });
+  },
+  play: async () => {
+    console.log('[TimerStore] play');
+    engine.play();
+    set((state) => {
+      const newState = {
+        ...state,
+        phase: engine.phase,
+        startedAt: engine.state.startedAt,
+        pausedAt: null,
+        totalPausedMs: 0,
+        elapsed: engine.elapsed,
+      };
+      saveTimerState(newState);
+      return newState;
+    });
+    startTicking(set);
+    // Notifications and persistence
+    const state = useTimerStore.getState();
+    await startBackgroundTimer(engine.remaining, state.currentBlockName || '', state.sessionId || '');
+  },
+  pause: async () => {
+    console.log('[TimerStore] pause');
+    engine.pause();
+    set((state) => {
+      const newState = {
+        ...state,
+        phase: engine.phase,
+        pausedAt: engine.state.pausedAt,
+        elapsed: engine.elapsed,
+      };
+      saveTimerState(newState);
+      return newState;
+    });
+    stopTicking();
+    // Notifications and persistence
+    await stopBackgroundTimer();
+  },
+  resume: async () => {
+    console.log('[TimerStore] resume');
+    engine.resume();
+    set((state) => {
+      const newState = {
+        ...state,
+        phase: engine.phase,
+        pausedAt: null,
+        totalPausedMs: engine.state.totalPausedMs,
+        elapsed: engine.elapsed,
+      };
+      saveTimerState(newState);
+      return newState;
+    });
+    startTicking(set);
+    // Notifications and persistence
+    const state = useTimerStore.getState();
+    await startBackgroundTimer(engine.remaining, state.currentBlockName || '', state.sessionId || '');
+  },
+  skip: async () => {
+    console.log('[TimerStore] skip');
+    set((state) => {
+      const nextIndex = engine.skip(state.blocks);
+      let newState;
+      if (nextIndex === -1) {
         stopTicking();
-        cancelTimerNotifications().catch(() => {});
+        newState = {
+          ...state,
+          phase: 'completed' as TimerPhase,
+        };
+      } else {
+        newState = {
+          ...state,
+          blockIndex: nextIndex,
+          blockDurationMs: state.blocks[nextIndex]?.durationMinutes ? state.blocks[nextIndex].durationMinutes * 60 * 1000 : 0,
+          phase: 'idle' as TimerPhase,
+          startedAt: null,
+          pausedAt: null,
+          totalPausedMs: 0,
+          elapsed: 0,
+          currentBlockName: state.blocks[nextIndex]?.name || '',
+        };
       }
-    },
-
-    end: () => {
-      engine.end();
-      stopTicking();
-      stopBackgroundTimer().catch(() => {});
-      syncFromEngine();
-    },
-
-    tick: () => {
-      engine.tick();
-      syncFromEngine();
-    },
+      saveTimerState(newState);
+      return newState;
+    });
+    stopTicking();
+    // Notifications and persistence
+    await stopBackgroundTimer();
+  },
+  end: async () => {
+    console.log('[TimerStore] end');
+    engine.end();
+    set((state) => {
+      const newState = {
+        ...state,
+        phase: 'completed' as TimerPhase,
+        pausedAt: null,
+        elapsed: engine.elapsed,
+      };
+      saveTimerState(newState);
+      return newState;
+    });
+    stopTicking();
+    // Notifications and persistence
+    await stopBackgroundTimer();
+  },
+  tick: () => {
+    console.log('[TimerStore] tick');
+    const phase = engine.tick();
+    set((state) => ({
+      ...state,
+      phase,
+      elapsed: engine.elapsed,
+    }));
+  },
   };
 });
+
+export default useTimerStore;
+
+// Example usage of derived values in a component or selector
+const useDerivedTimerValues = () => {
+  const engine = useTimerStore((state) => state._engine);
+  return {
+    remaining: engine.remaining,
+    progress: engine.progress,
+    isOverdue: engine.isOverdue,
+  };
+};

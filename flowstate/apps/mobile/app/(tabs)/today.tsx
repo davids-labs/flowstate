@@ -27,6 +27,7 @@ import {
 } from "@flowstate/core";
 import { fontSize, spacing, borderRadius } from "../../constants/theme";
 import { useTheme } from "../../constants/ThemeContext";
+import { FlatList } from "react-native";
 
 type ViewMode = "list" | "timeline";
 
@@ -483,10 +484,11 @@ export default function TodayScreen() {
           {/* Routine picker */}
           <Text style={[styles.modalLabel, { color: themeColors.muted }]}>Routine</Text>
           {allRoutines.length > 0 ? (
-            <ScrollView style={styles.routineList} nestedScrollEnabled>
-              {allRoutines.map((r: any) => (
+            <FlatList
+              data={allRoutines}
+              keyExtractor={(r: { id: string }) => r.id}
+              renderItem={({ item: r }: { item: { id: string; name: string; totalDurationMinutes: number } }) => (
                 <Pressable
-                  key={r.id}
                   style={[
                     styles.routineOption,
                     { backgroundColor: themeColors.surface },
@@ -503,8 +505,8 @@ export default function TodayScreen() {
                   </Text>
                   <Text style={[styles.routineDuration, { color: themeColors.muted }]}>{r.totalDurationMinutes}min</Text>
                 </Pressable>
-              ))}
-            </ScrollView>
+              )}
+            />
           ) : (
             <View style={styles.noRoutines}>
               <Text style={[styles.noRoutinesText, { color: themeColors.muted }]}>No routines yet</Text>
@@ -561,16 +563,18 @@ export default function TodayScreen() {
         <View style={[styles.modalSheet, { backgroundColor: themeColors.background }]}>
           <Text style={[styles.modalTitle, { color: themeColors.text }]}>Add Module</Text>
           {availableModules.length > 0 ? (
-            <ScrollView style={styles.routineList} nestedScrollEnabled>
-              {availableModules.map((m: any) => (
-                <Pressable key={m.id} style={[styles.routineOption, { backgroundColor: themeColors.surface }]} onPress={() => handleAddModule(m.id)}>
-                  <Text style={[styles.routineOptionText, { color: themeColors.text }]}>
-                    {m.emoji ?? "📦"} {m.label}
-                  </Text>
+            <FlatList
+              data={availableModules}
+              keyExtractor={(m: { id: string }) => m.id}
+              renderItem={({ item: m }: { item: { id: string; label: string; emoji?: string; type: string } }) => (
+                <Pressable
+                  style={[styles.routineOption, { backgroundColor: themeColors.surface }]} onPress={() => handleAddModule(m.id)}
+                >
+                  <Text style={[styles.routineOptionText, { color: themeColors.text }]}> {m.emoji ?? "📦"} {m.label} </Text>
                   <Text style={[styles.routineDuration, { color: themeColors.muted }]}>{m.type}</Text>
                 </Pressable>
-              ))}
-            </ScrollView>
+              )}
+            />
           ) : (
             <View style={styles.noRoutines}>
               <Text style={[styles.noRoutinesText, { color: themeColors.muted }]}>All modules are already assigned</Text>

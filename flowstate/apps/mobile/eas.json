@@ -34,6 +34,9 @@
     "production": {
       "autoIncrement": true,
       "channel": "production",
+      "android": {
+        "buildType": "apk"
+      },
       "env": {
         "APP_ENV": "production"
       }

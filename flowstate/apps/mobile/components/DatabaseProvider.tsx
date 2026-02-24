@@ -305,10 +305,13 @@ export function DatabaseProvider({ children }: { children: React.ReactNode }) {
   };
 
   useEffect(() => {
+    console.log('Initializing DatabaseProvider...');
+
     let mounted = true;
 
     function initDb() {
-      // expo-sqlite is not supported on web — show unsupported message
+      console.log('Starting database initialization...');
+
       if (Platform.OS === 'web') {
         console.warn('SQLite not available on web');
         if (mounted) setError('FlowState requires a native device. Web is not supported.');
@@ -316,68 +319,39 @@ export function DatabaseProvider({ children }: { children: React.ReactNode }) {
       }
 
       try {
-        // Use the singleton helper — survives hot-reloads, GC, and re-mounts.
-        // getOrCreateSqliteDb() verifies the handle is alive before reusing it.
         const sqliteDb = getOrCreateSqliteDb();
+        console.log('SQLite database handle created:', sqliteDb);
 
-        // Enable WAL mode for better concurrent read/write performance
-        try {
-          sqliteDb.execSync('PRAGMA journal_mode = WAL;');
-        } catch (walErr) {
-          console.warn('WAL mode warning:', walErr);
-        }
-
-        // Run initial table creation migrations (synchronously)
-        for (const stmt of MIGRATIONS) {
-          try {
-            sqliteDb.execSync(stmt);
-          } catch (migrationErr) {
-            console.warn('Migration statement warning:', migrationErr);
-            // Continue — CREATE IF NOT EXISTS may warn but is harmless
-          }
-        }
-
-        // Version-based migrations for schema updates
-        try {
-          const versionResult = sqliteDb.getFirstSync('PRAGMA user_version') as any;
-          const currentVersion = versionResult?.user_version ?? 0;
-
-          if (currentVersion < CURRENT_SCHEMA_VERSION) {
-            for (let v = currentVersion + 1; v <= CURRENT_SCHEMA_VERSION; v++) {
-              const stmts = VERSION_MIGRATIONS[v];
-              if (stmts) {
-                for (const stmt of stmts) {
-                  try {
-                    sqliteDb.execSync(stmt);
-                  } catch (e) {
-                    console.warn(`Version ${v} migration warning:`, e);
-                  }
-                }
-              }
-            }
-            sqliteDb.execSync(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);
-            console.log(`Database upgraded to version ${CURRENT_SCHEMA_VERSION}`);
-          }
-        } catch (versionErr) {
-          console.warn('Version migration warning:', versionErr);
-        }
-
-        // Verify the database is actually usable
-        try {
-          sqliteDb.execSync('SELECT 1');
-        } catch (verifyErr) {
-          throw new Error('Database verification failed: ' + String(verifyErr));
-        }
-
-        // Wrap with Drizzle ORM (also cached in getOrCreateDrizzleDb)
         const database = getOrCreateDrizzleDb(sqliteDb);
+        console.log('Drizzle ORM database initialized:', database);
+
+        // Ensure schema exists: run all CREATE TABLE IF NOT EXISTS migrations
+        try {
+          for (const sql of MIGRATIONS) {
+            try {
+              sqliteDb.execSync(sql);
+            } catch (e) {
+              // Non-fatal: log and continue so partial schemas don't block startup
+              console.warn('Migration statement failed:', e, sql);
+            }
+          }
+          // Record current schema version so future migrations can be applied
+          try {
+            sqliteDb.execSync(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);
+          } catch (e) {
+            console.warn('Failed to set PRAGMA user_version:', e);
+          }
+        } catch (e) {
+          console.warn('Schema migration step failed:', e);
+        }
 
         if (mounted) {
-          setDb(database as any);
+          setDb(database);
           setIsReady(true);
+          console.log('DatabaseProvider is ready.');
         }
       } catch (err) {
-        console.error('Database init failed:', err);
+        console.error('Database initialization failed:', err);
         if (mounted) {
           setError(err instanceof Error ? err.message : 'Database initialization failed');
         }

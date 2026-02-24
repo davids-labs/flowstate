@@ -23,18 +23,22 @@ function formatTimeCompact(ms: number): string {
  */
 export function NowBar() {
   const router = useRouter();
-  const phase = useTimerStore(s => s.phase);
-  const remaining = useTimerStore(s => s.remaining);
-  const currentBlockName = useTimerStore(s => s.currentBlockName);
-  const routineName = useTimerStore(s => s.routineName);
-  const isOverdue = useTimerStore(s => s.isOverdue);
-  const sessionId = useTimerStore(s => s.sessionId);
+  const phase = useTimerStore((s) => s.phase);
+  const currentBlockName = useTimerStore((s) => s.currentBlockName);
+  const routineName = useTimerStore((s) => s.routineName);
+  const sessionId = useTimerStore((s) => s.sessionId);
+  const engine = useTimerStore((s) => s._engine);
+
+  const remaining = engine?.remaining ?? 0;
+  const isOverdue = engine?.isOverdue ?? false;
+
+  // Ensure hooks are called in the same order on every render
+  const { themeColors } = useTheme();
 
   // Only show when timer is actively running, paused, or overdue
   const isActive = phase === 'running' || phase === 'paused' || phase === 'overdue';
   if (!isActive) return null;
 
-  const { themeColors } = useTheme();
   const isPaused = phase === 'paused';
 
   return (

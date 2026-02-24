@@ -102,11 +102,8 @@ export default function RoutineLauncherScreen() {
   // Timer state
   const {
     phase,
-    remaining,
-    progress,
     blockIndex,
     totalBlocks,
-    isOverdue,
     currentBlockName,
     init,
     play,
@@ -114,7 +111,24 @@ export default function RoutineLauncherScreen() {
     resume,
     skip,
     end,
-  } = useTimerStore();
+    engine,
+  } = useTimerStore((s) => ({
+    phase: s.phase,
+    blockIndex: s.blockIndex,
+    totalBlocks: s.totalBlocks,
+    currentBlockName: s.currentBlockName,
+    init: s.init,
+    play: s.play,
+    pause: s.pause,
+    resume: s.resume,
+    skip: s.skip,
+    end: s.end,
+    engine: s._engine,
+  }));
+
+  const remaining = engine?.remaining ?? 0;
+  const progress = engine?.progress ?? 0;
+  const isOverdue = engine?.isOverdue ?? false;
 
   // Load module → routine → blocks
   useEffect(() => {
