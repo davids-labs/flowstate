@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { View, Text, Pressable, StyleSheet, Share, ActivityIndicator } from 'react-native';
+import { View, Text, Pressable, StyleSheet, Share, ActivityIndicator, Alert } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
@@ -34,11 +34,9 @@ function computeCountdown(targetDate: string, startDate?: string) {
 function computeCountup(originDate: string) {
   const origin = new Date(originDate + 'T00:00:00').getTime();
   const diff = Math.max(0, Date.now() - origin);
-
   const totalDays = Math.floor(diff / 86400000);
   const years = Math.floor(totalDays / 365);
   const remainingDays = totalDays % 365;
-
   return { totalDays, years, remainingDays };
 }
 
@@ -66,13 +64,6 @@ export default function ModuleDetailScreen() {
 
   useFocusEffect(useCallback(() => { loadModule(); }, [loadModule]));
 
-  // Clear pending timeout on unmount to prevent stale DB writes
-  useEffect(() => {
-    return () => {
-      if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current);
-    };
-  }, []);
-
   useEffect(() => {
     if (!mod) return;
     if (mod.type !== 'countdown' && mod.type !== 'countup') return;
@@ -80,8 +71,15 @@ export default function ModuleDetailScreen() {
     return () => clearInterval(interval);
   }, [mod]);
 
+  // Archive: deferred (3.2s) with undo — safe because archive is reversible
   const [undoToast, setUndoToast] = useState<{ message: string; undoAction: () => void } | null>(null);
-  const pendingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingArchiveRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (pendingArchiveRef.current) clearTimeout(pendingArchiveRef.current);
+    };
+  }, []);
 
   const handleArchive = async () => {
     if (!db || !mod) return;
@@ -89,32 +87,45 @@ export default function ModuleDetailScreen() {
     const label = mod.label ?? 'Module';
     setUndoToast({
       message: `"${label}" archived`,
-      undoAction: () => setUndoToast(null),
+      undoAction: () => setUndoToast(null), // cancel the pending archive
     });
-    if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current);
-    pendingTimerRef.current = setTimeout(async () => {
+    if (pendingArchiveRef.current) clearTimeout(pendingArchiveRef.current);
+    pendingArchiveRef.current = setTimeout(async () => {
       try {
         await updateModuleSpec(db, mod.id, { archivedAt: new Date().toISOString() });
         router.canGoBack() ? router.back() : router.replace('/(tabs)');
-      } catch (e) { console.error('Archive failed:', e); }
+      } catch (e) {
+        console.error('Archive failed:', e);
+      }
     }, 3200);
   };
 
-  const handleDelete = async () => {
+  // Delete: execute IMMEDIATELY — deferred delete was being cancelled by navigation
+  const handleDelete = () => {
     if (!db || !mod) return;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     const label = mod.label ?? 'Module';
-    setUndoToast({
-      message: `"${label}" deleted`,
-      undoAction: () => setUndoToast(null),
-    });
-    if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current);
-    pendingTimerRef.current = setTimeout(async () => {
-      try {
-        await deleteModuleSpec(db, mod.id);
-        router.canGoBack() ? router.back() : router.replace('/(tabs)');
-      } catch (e) { console.error('Delete failed:', e); }
-    }, 3200);
+    Alert.alert(
+      'Delete Module',
+      `Delete "${label}"? This cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+            try {
+              await deleteModuleSpec(db, mod.id);
+              // Navigate only after confirmed DB deletion
+              router.canGoBack() ? router.back() : router.replace('/(tabs)');
+            } catch (e) {
+              console.error('Delete failed:', e);
+              Alert.alert('Error', 'Failed to delete module. Please try again.');
+            }
+          },
+        },
+      ],
+    );
   };
 
   const handleShare = async () => {
@@ -212,7 +223,11 @@ export default function ModuleDetailScreen() {
           <UndoToast
             message={undoToast.message}
             visible={true}
-            onUndo={() => { undoToast.undoAction(); if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current); setUndoToast(null); }}
+            onUndo={() => {
+              undoToast.undoAction();
+              if (pendingArchiveRef.current) clearTimeout(pendingArchiveRef.current);
+              setUndoToast(null);
+            }}
             onDismiss={() => setUndoToast(null)}
           />
         )}
@@ -230,7 +245,7 @@ export default function ModuleDetailScreen() {
           <Text style={[styles.heroLabel, { color: themeColors.muted }]}>{mod.label}</Text>
           <Text style={[styles.heroCount, { color: themeColors.accent }]}>{cu.totalDays}</Text>
           <Text style={[styles.heroUnit, { color: themeColors.text }]}>
-            {cu.years > 0 ? `${cu.years} year${cu.years !== 1 ? 's' : ''}, ${cu.remainingDays} days` : `days`}
+            {cu.years > 0 ? `${cu.years} year${cu.years !== 1 ? 's' : ''}, ${cu.remainingDays} days` : 'days'}
           </Text>
           {config.originDate && (
             <Text style={[styles.heroDate, { color: themeColors.muted }]}>
@@ -264,7 +279,11 @@ export default function ModuleDetailScreen() {
           <UndoToast
             message={undoToast.message}
             visible={true}
-            onUndo={() => { undoToast.undoAction(); if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current); setUndoToast(null); }}
+            onUndo={() => {
+              undoToast.undoAction();
+              if (pendingArchiveRef.current) clearTimeout(pendingArchiveRef.current);
+              setUndoToast(null);
+            }}
             onDismiss={() => setUndoToast(null)}
           />
         )}
@@ -337,7 +356,11 @@ export default function ModuleDetailScreen() {
         <UndoToast
           message={undoToast.message}
           visible={true}
-          onUndo={() => { undoToast.undoAction(); if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current); setUndoToast(null); }}
+          onUndo={() => {
+            undoToast.undoAction();
+            if (pendingArchiveRef.current) clearTimeout(pendingArchiveRef.current);
+            setUndoToast(null);
+          }}
           onDismiss={() => setUndoToast(null)}
         />
       )}
@@ -346,106 +369,25 @@ export default function ModuleDetailScreen() {
 }
 
 const styles = StyleSheet.create({
-  loadingContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingTop: spacing.xxl,
-    gap: spacing.md,
-  },
-  empty: {
-    fontSize: fontSize.sm,
-    textAlign: 'center',
-  },
-  hero: {
-    alignItems: 'center',
-    paddingVertical: spacing.xxl,
-  },
-  heroEmoji: {
-    fontSize: 48,
-    marginBottom: spacing.sm,
-  },
-  heroLabel: {
-    fontSize: fontSize.lg,
-    fontWeight: '600',
-    marginBottom: spacing.md,
-  },
-  heroCount: {
-    fontSize: 72,
-    fontWeight: '800',
-    lineHeight: 80,
-  },
-  heroUnit: {
-    fontSize: fontSize.lg,
-    marginTop: spacing.xs,
-  },
-  heroDhms: {
-    fontSize: fontSize.md,
-    marginTop: spacing.xs,
-    fontVariant: ['tabular-nums'],
-  },
-  heroDate: {
-    fontSize: fontSize.sm,
-    marginTop: spacing.md,
-  },
-  heroType: {
-    fontSize: fontSize.md,
-    textTransform: 'capitalize',
-  },
-  progressContainer: {
-    width: '100%',
-    paddingHorizontal: spacing.lg,
-    marginTop: spacing.lg,
-  },
-  progressTrack: {
-    height: 8,
-    borderRadius: 4,
-    overflow: 'hidden',
-  },
-  progressFill: {
-    height: '100%',
-    borderRadius: 4,
-  },
-  progressText: {
-    fontSize: fontSize.sm,
-    textAlign: 'center',
-    marginTop: spacing.xs,
-  },
-  intention: {
-    fontSize: fontSize.md,
-    fontStyle: 'italic',
-    textAlign: 'center',
-    paddingHorizontal: spacing.lg,
-    marginTop: spacing.lg,
-  },
-  detailSection: {
-    borderRadius: borderRadius.md,
-    padding: spacing.md,
-    marginBottom: spacing.sm,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  detailLabel: {
-    fontSize: fontSize.md,
-    fontWeight: '600',
-  },
-  detailValue: {
-    fontSize: fontSize.md,
-  },
-  actionRow: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    marginTop: spacing.lg,
-  },
-  actionBtn: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.xs,
-    paddingVertical: spacing.md,
-    borderRadius: borderRadius.md,
-  },
-  actionLabel: {
-    fontSize: fontSize.sm,
-    fontWeight: '500',
-  },
+  loadingContainer: { alignItems: 'center', justifyContent: 'center', paddingTop: spacing.xxl, gap: spacing.md },
+  empty: { fontSize: fontSize.sm, textAlign: 'center' },
+  hero: { alignItems: 'center', paddingVertical: spacing.xxl },
+  heroEmoji: { fontSize: 48, marginBottom: spacing.sm },
+  heroLabel: { fontSize: fontSize.lg, fontWeight: '600', marginBottom: spacing.md },
+  heroCount: { fontSize: 72, fontWeight: '800', lineHeight: 80 },
+  heroUnit: { fontSize: fontSize.lg, marginTop: spacing.xs },
+  heroDhms: { fontSize: fontSize.md, marginTop: spacing.xs },
+  heroDate: { fontSize: fontSize.sm, marginTop: spacing.md },
+  heroType: { fontSize: fontSize.md, textTransform: 'capitalize' },
+  progressContainer: { width: '100%', paddingHorizontal: spacing.lg, marginTop: spacing.lg },
+  progressTrack: { height: 8, borderRadius: 4, overflow: 'hidden' },
+  progressFill: { height: '100%', borderRadius: 4 },
+  progressText: { fontSize: fontSize.sm, textAlign: 'center', marginTop: spacing.xs },
+  intention: { fontSize: fontSize.md, fontStyle: 'italic', textAlign: 'center', paddingHorizontal: spacing.lg, marginTop: spacing.lg },
+  detailSection: { borderRadius: borderRadius.md, padding: spacing.md, marginBottom: spacing.sm, flexDirection: 'row', justifyContent: 'space-between' },
+  detailLabel: { fontSize: fontSize.md, fontWeight: '600' },
+  detailValue: { fontSize: fontSize.md },
+  actionRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.lg },
+  actionBtn: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.xs, paddingVertical: spacing.md, borderRadius: borderRadius.md },
+  actionLabel: { fontSize: fontSize.sm, fontWeight: '500' },
 });
