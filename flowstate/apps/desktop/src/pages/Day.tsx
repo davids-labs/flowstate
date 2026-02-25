@@ -1,7 +1,7 @@
 import { useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, CheckSquare, Clock, PlayCircle, Square, Star } from 'lucide-react';
-import { useDatabaseReady, useDatabase } from '../components/DatabaseProvider';
+import { useDatabaseReady, useDatabase } from '../components/useDatabase';
 import { useDayStore } from '../stores/dayStore';
 import * as queries from '@flowstate/core';
 import { useState } from 'react';
@@ -12,9 +12,17 @@ interface SessionRow {
   status: string;
 }
 
+interface ModuleSpec {
+  id: string;
+  label: string;
+  emoji?: string | null;
+  type: string;
+}
+
 export function DayPage() {
   const { date } = useParams<{ date: string }>();
   const navigate = useNavigate();
+  const db = useDatabase();
   const ready = useDatabaseReady();
 
   const dayPlan = useDayStore((s) => s.dayPlan);
@@ -24,25 +32,34 @@ export function DayPage() {
   const setModuleValue = useDayStore((s) => s.setModuleValue);
 
   const [sessions, setSessions] = useState<SessionRow[]>([]);
-  const [moduleSpecs, setModuleSpecs] = useState<any[]>([]);
+  const [moduleSpecs, setModuleSpecs] = useState<ModuleSpec[]>([]);
 
-  let db: any = null;
-  try { if (ready) db = useDatabase(); } catch { /* not ready */ }
+  
 
   const loadData = useCallback(async () => {
     if (!db || !date) return;
     await loadDay(db, date);
-    const specs = await queries.getModuleSpecs(db);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const specs = (await queries.getModuleSpecs(db as any)) as ModuleSpec[];
     setModuleSpecs(specs);
   }, [db, date, loadDay]);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => {
+    const t = setTimeout(() => { void loadData(); }, 0);
+    return () => clearTimeout(t);
+  }, [loadData]);
 
   useEffect(() => {
     if (!db || !dayPlan) return;
-    queries.getSessions(db, dayPlan.id).then((ss: any[]) => {
-      setSessions(ss.map((s: any) => ({ id: s.id, routineName: s.routineName, status: s.status })));
-    }).catch(() => {});
+    (async () => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const ss = (await queries.getSessions(db as any, dayPlan.id)) as any[];
+        setSessions(ss.map((s) => ({ id: s.id, routineName: s.routineName, status: s.status })));
+      } catch {
+        // ignore
+      }
+    })();
   }, [db, dayPlan]);
 
   if (!ready) return <div className="empty-state"><h3>Loading...</h3></div>;
@@ -51,7 +68,7 @@ export function DayPage() {
   const dateLabel = dateObj.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
 
   const dayModuleSpecs = dayPlan?.moduleIds
-    ? moduleSpecs.filter((m: any) => dayPlan.moduleIds.includes(m.id))
+    ? moduleSpecs.filter((m) => (dayPlan.moduleIds ?? []).includes(m.id))
     : [];
 
   return (
@@ -113,36 +130,37 @@ export function DayPage() {
           {dayModuleSpecs.length > 0 && (
             <>
               <h3 className="section-title">Modules</h3>
-              {dayModuleSpecs.map((spec: any) => {
-                const mv = moduleValues.find((v) => v.moduleId === spec.id);
+              {dayModuleSpecs.map((spec: ModuleSpec) => {
+                const s = spec;
+                const mv = moduleValues.find((v) => v.moduleId === s.id);
                 return (
-                  <div key={spec.id} className="card module-row">
-                    <span className="module-emoji">{spec.emoji || '📦'}</span>
+                  <div key={s.id} className="card module-row">
+                    <span className="module-emoji">{s.emoji || '📦'}</span>
                     <div className="module-info" style={{ flex: 1 }}>
-                      <div className="module-label">{spec.label}</div>
+                      <div className="module-label">{s.label}</div>
                     </div>
-                    {spec.type === 'rating' && (
+                    {s.type === 'rating' && (
                       <div style={{ display: 'flex', gap: 4 }}>
                         {[1, 2, 3, 4, 5].map((n) => (
                           <Star key={n} size={20} fill={Number(mv?.value ?? 0) >= n ? 'var(--accent)' : 'none'} color="var(--accent)"
-                            style={{ cursor: 'pointer' }} onClick={() => db && setModuleValue(db, spec.id, String(n))} />
+                            style={{ cursor: 'pointer' }} onClick={() => db && setModuleValue(db, s.id, String(n))} />
                         ))}
                       </div>
                     )}
-                    {spec.type === 'checkbox' && (
+                    {s.type === 'checkbox' && (
                       <div className="checkbox-box" style={mv?.value === 'true' ? { background: 'var(--accent)', borderColor: 'var(--accent)' } : {}}
-                        onClick={() => db && setModuleValue(db, spec.id, mv?.value === 'true' ? 'false' : 'true')}>
+                        onClick={() => db && setModuleValue(db, s.id, mv?.value === 'true' ? 'false' : 'true')}>
                         {mv?.value === 'true' && <CheckSquare size={16} color="white" />}
                       </div>
                     )}
-                    {spec.type === 'data_input' && (
+                    {s.type === 'data_input' && (
                       <input type="number" value={mv?.value ?? ''}
-                        onChange={(e) => db && setModuleValue(db, spec.id, e.target.value)}
+                        onChange={(e) => db && setModuleValue(db, s.id, e.target.value)}
                         style={{ width: 80, textAlign: 'right', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 8px', fontSize: 14 }} />
                     )}
-                    {spec.type === 'text_note' && (
+                    {s.type === 'text_note' && (
                       <input type="text" placeholder="Add note..." value={mv?.value ?? ''}
-                        onChange={(e) => db && setModuleValue(db, spec.id, e.target.value)}
+                        onChange={(e) => db && setModuleValue(db, s.id, e.target.value)}
                         style={{ width: 200, border: '1px solid var(--border)', borderRadius: 6, padding: '4px 8px', fontSize: 14 }} />
                     )}
                   </div>

@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { Calendar, Upload, ChevronRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { useDatabaseReady, useDatabase } from '../components/DatabaseProvider';
+import { useDatabaseReady, useDatabase } from '../components/useDatabase';
 import * as queries from '@flowstate/core';
 
 interface DayRow {
@@ -19,6 +19,7 @@ const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 export function PlanPage() {
   const navigate = useNavigate();
+  const db = useDatabase();
   const ready = useDatabaseReady();
   const [days, setDays] = useState<DayRow[]>([]);
   const [planName, setPlanName] = useState<string | null>(null);
@@ -26,8 +27,7 @@ export function PlanPage() {
   const [completedDays, setCompletedDays] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  let db: any = null;
-  try { if (ready) db = useDatabase(); } catch { /* not ready */ }
+  
 
   const loadData = useCallback(async () => {
     if (!db) return;
@@ -36,7 +36,17 @@ export function PlanPage() {
       if (plan) {
         setPlanName(plan.name);
         const dbDays = await queries.getDayPlansInRange(db, plan.startDate, plan.endDate);
-        const mapped: DayRow[] = dbDays.map((d: any) => {
+        interface DBDay {
+          id: string;
+          date: string;
+          title: string;
+          dayNumber?: number;
+          totalDays?: number;
+          mustDo?: string[] | string;
+          mustDoDone?: boolean[] | string;
+          status: string;
+        }
+        const mapped: DayRow[] = ((dbDays as unknown) as DBDay[]).map((d) => {
           const mustDo = typeof d.mustDo === 'string' ? JSON.parse(d.mustDo) : (d.mustDo ?? []);
           const mustDoDone = typeof d.mustDoDone === 'string' ? JSON.parse(d.mustDoDone) : (d.mustDoDone ?? []);
           return {

@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { Upload, Download, AlertTriangle, CheckCircle } from 'lucide-react';
-import { useDatabaseReady, useDatabase } from '../components/DatabaseProvider';
+import { useDatabaseReady, useDatabase } from '../components/useDatabase';
 import { exportBackup, importBackup } from '@flowstate/core';
 
 export function BackupPage() {
+  const db = useDatabase();
   const ready = useDatabaseReady();
-  let db: any = null;
-  try { if (ready) db = useDatabase(); } catch {}
+  
 
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
@@ -26,8 +26,9 @@ export function BackupPage() {
       a.click();
       URL.revokeObjectURL(url);
       setStatus(`Exported ${Object.keys(data.tables).length} tables successfully.`);
-    } catch (e: any) {
-      setStatus(`Export failed: ${e.message ?? 'unknown error'}`);
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : String(e);
+      setStatus(`Export failed: ${message ?? 'unknown error'}`);
     } finally {
       setBusy(false);
     }
@@ -55,8 +56,9 @@ export function BackupPage() {
         }
         const { tablesRestored, rowsRestored } = await importBackup(db, data);
         setStatus(`Restored ${tablesRestored} tables, ${rowsRestored} rows.`);
-      } catch (e: any) {
-        setStatus(`Import failed: ${e.message ?? 'unknown error'}`);
+      } catch (e: unknown) {
+        const message = e instanceof Error ? e.message : String(e);
+        setStatus(`Import failed: ${message ?? 'unknown error'}`);
       } finally {
         setBusy(false);
       }

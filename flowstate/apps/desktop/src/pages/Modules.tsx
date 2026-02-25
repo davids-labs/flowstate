@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Archive, Plus, Timer, Hash, FileText, CheckCircle, TrendingUp, Target, Trash2, X, FolderOpen, ChevronLeft, Clock } from 'lucide-react';
-import { useDatabaseReady, useDatabase } from '../components/DatabaseProvider';
+import { useDatabaseReady, useDatabase } from '../components/useDatabase';
 import { useModuleStore } from '../stores/moduleStore';
 
 const TYPE_ICONS: Record<string, React.ReactNode> = {
@@ -36,7 +36,24 @@ interface CreateForm {
   isLive: boolean;
 }
 
+interface ModuleSpec {
+  id: string;
+  type: string;
+  label: string;
+  emoji?: string | null;
+  placements: string[];
+  collectionId?: string | null;
+  archivedAt?: string | null;
+}
+
+interface CollectionSpec {
+  id: string;
+  parentId?: string | null;
+  name: string;
+  emoji?: string | null;
+}
 export function ModulesPage() {
+  const db = useDatabase();
   const ready = useDatabaseReady();
   const modules = useModuleStore((s) => s.modules);
   const loadModules = useModuleStore((s) => s.loadModules);
@@ -46,34 +63,35 @@ export function ModulesPage() {
 
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState<CreateForm>({ label: '', type: 'checkbox', emoji: '📦', isLive: false });
-  const [archivedModules, setArchivedModules] = useState<any[]>([]);
-  const [allCollections, setAllCollections] = useState<any[]>([]);
+  const [archivedModules, setArchivedModules] = useState<ModuleSpec[]>([]);
+  const [allCollections, setAllCollections] = useState<CollectionSpec[]>([]);
   const [folderStack, setFolderStack] = useState<Array<{ id: string | null; name: string }>>([{ id: null, name: 'Modules' }]);
 
   const currentFolderId = folderStack[folderStack.length - 1].id;
   const currentFolderName = folderStack[folderStack.length - 1].name;
 
-  let db: any = null;
-  try { if (ready) db = useDatabase(); } catch { /* not ready */ }
+  
 
   const loadData = useCallback(async () => {
     if (!db) return;
     await loadModules(db);
     try {
       const core = await import('@flowstate/core');
-      const all = await core.getModuleSpecs(db);
-      setArchivedModules(all.filter((m: any) => m.archivedAt));
-      const cols = await core.getCollections(db);
+      const all = (await core.getModuleSpecs(db)) as ModuleSpec[];
+      setArchivedModules(all.filter((m) => !!m.archivedAt));
+      const cols = (await core.getCollections(db)) as CollectionSpec[];
       setAllCollections(cols);
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }, [db, loadModules]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  const visibleFolders = allCollections.filter((c: any) =>
+  const visibleFolders = allCollections.filter((c) =>
     currentFolderId === null ? !c.parentId : c.parentId === currentFolderId,
   );
-  const visibleModules = modules.filter((m: any) =>
+  const visibleModules = modules.filter((m) =>
     !m.archivedAt && (currentFolderId === null ? !m.collectionId : m.collectionId === currentFolderId),
   );
 
@@ -164,7 +182,7 @@ export function ModulesPage() {
       {/* Folder rows */}
       {visibleFolders.length > 0 && (
         <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: 12 }}>
-          {visibleFolders.map((c: any, idx: number) => (
+          {visibleFolders.map((c, idx) => (
             <div key={c.id} className="module-row" style={{ borderBottom: idx < visibleFolders.length - 1 ? '1px solid var(--border)' : 'none', cursor: 'pointer' }}
               onClick={() => setFolderStack(prev => [...prev, { id: c.id, name: c.name }])}>
               <span className="module-emoji">{c.emoji || '📁'}</span>
@@ -213,7 +231,7 @@ export function ModulesPage() {
             Archived
           </h3>
           <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-            {archivedModules.map((m: any) => (
+            {archivedModules.map((m) => (
               <div key={m.id} className="module-row" style={{ opacity: 0.6 }}>
                 <span className="module-emoji">{m.emoji || '📦'}</span>
                 <div className="module-info" style={{ flex: 1 }}>

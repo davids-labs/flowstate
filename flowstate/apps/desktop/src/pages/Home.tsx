@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Clock, PlayCircle, Target, TrendingUp } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { useDatabaseReady, useDatabase } from '../components/DatabaseProvider';
+import { useDatabaseReady, useDatabase } from '../components/useDatabase';
 import { useModuleStore } from '../stores/moduleStore';
 import { useDayStore } from '../stores/dayStore';
 import * as queries from '@flowstate/core';
@@ -22,6 +22,7 @@ interface LoggedModule {
 
 export function HomePage() {
   const navigate = useNavigate();
+  const db = useDatabase();
   const ready = useDatabaseReady();
   const [liveModules, setLiveModules] = useState<LiveModule[]>([]);
   const [loggedModules, setLoggedModules] = useState<LoggedModule[]>([]);
@@ -38,9 +39,7 @@ export function HomePage() {
   const loadModules = useModuleStore((s) => s.loadModules);
   const getLiveModules = useModuleStore((s) => s.getLiveModules);
 
-  let db: ReturnType<typeof useDatabase> | null = null;
-  try { if (ready) db = useDatabase(); } catch { /* not ready */ }
-
+  
   const loadData = useCallback(async () => {
     if (!db) return;
     await loadModules(db);

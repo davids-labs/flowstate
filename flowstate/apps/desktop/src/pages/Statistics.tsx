@@ -7,7 +7,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { useDatabase, useDatabaseReady } from '../components/DatabaseProvider';
+import { useDatabase, useDatabaseReady } from '../components/useDatabase';
 import {
   VolumeBarChart,
   MetricTrendLineChart,
@@ -17,6 +17,7 @@ import {
   RawLedger,
 } from '../components/charts';
 import * as core from '@flowstate/core';
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 interface ModuleOption {
   id: string;
@@ -26,6 +27,60 @@ interface ModuleOption {
 }
 
 type TimeRange = '7d' | '30d' | '90d' | '365d';
+
+interface ModuleSpec {
+  id: string;
+  label: string;
+  emoji?: string | null;
+  type: string;
+  archivedAt?: string | null;
+}
+
+interface VolumeData {
+  bars: Array<{ label: string; value: number }>;
+  unit?: string;
+  label?: string;
+}
+
+interface TrendData {
+  points: Array<{ date: string; value: number; loggedAt?: string }>;
+  unit?: string;
+  label?: string;
+}
+
+interface ConsistencyData {
+  days: any;
+  label?: string;
+  totalLogged?: number;
+}
+
+interface CircadianData {
+  buckets: any;
+  label?: string;
+  peakHour?: number;
+  totalSessions?: number;
+}
+
+interface LedgerData {
+  entries: any[];
+  hasMore?: boolean;
+}
+
+interface GoalMetrics {
+  label?: string;
+  unit?: string;
+  startValue?: number;
+  targetValue?: number;
+  currentValue?: number;
+  requiredDailyRate?: number;
+  actualDailyRate?: number;
+  adjustedDailyRate?: number;
+  daysRemaining?: number;
+  progressFraction?: number;
+  isAhead?: boolean;
+  gapFromLinear?: number;
+  targetPath?: Array<{ date: string; value: number }>;
+}
 
 function getDateRange(range: TimeRange): { start: string; end: string } {
   const end = new Date();
@@ -48,25 +103,35 @@ export function StatisticsPage() {
   const [timeRange, setTimeRange] = useState<TimeRange>('30d');
 
   // Data state
-  const [volumeData, setVolumeData] = useState<any>(null);
-  const [trendData, setTrendData] = useState<any>(null);
-  const [consistencyData, setConsistencyData] = useState<any>(null);
-  const [circadianData, setCircadianData] = useState<any>(null);
-  const [ledgerData, setLedgerData] = useState<any>(null);
-  const [goalMetrics, setGoalMetrics] = useState<any>(null);
+  const [volumeData, setVolumeData] = useState<VolumeData | null>(null);
+  const [trendData, setTrendData] = useState<TrendData | null>(null);
+  const [consistencyData, setConsistencyData] = useState<ConsistencyData | null>(null);
+  const [circadianData, setCircadianData] = useState<CircadianData | null>(null);
+  const [ledgerData, setLedgerData] = useState<LedgerData | null>(null);
+  const [goalMetrics, setGoalMetrics] = useState<GoalMetrics | null>(null);
   const [ledgerPage, setLedgerPage] = useState(1);
 
   // Load modules
   useEffect(() => {
     if (!db || !ready) return;
-    core.getModuleSpecs(db).then((specs: any[]) => {
-      setModules(
-        specs.filter((s) => !s.archivedAt).map((s) => ({ id: s.id, label: s.label, emoji: s.emoji, type: s.type })),
-      );
-    });
+    (async () => {
+      try {
+        const specs = (await core.getModuleSpecs(db as any)) as ModuleSpec[];
+        setModules(specs.filter((s) => !s.archivedAt).map((s) => ({ id: s.id, label: s.label, emoji: s.emoji, type: s.type })));
+      } catch (err) {
+        console.error('Failed to load module specs', err);
+      }
+    })();
   }, [db, ready]);
 
   // Load data
+  async function loadGoalMetrics(database: unknown, moduleId: string): Promise<GoalMetrics | null> {
+    const goals = (await core.getGoalsForModule(database as any, moduleId)) as Array<{ id: string; createdAt?: string }>;
+    if (!goals || goals.length === 0) return null;
+    const sorted = [...goals].sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''));
+    return (await core.calculateGoalMetrics(database as any, sorted[0].id)) as GoalMetrics;
+  }
+
   useEffect(() => {
     if (!db || !ready || !selectedId) return;
 
@@ -74,36 +139,29 @@ export function StatisticsPage() {
     const groupBy = timeRange === '7d' || timeRange === '30d' ? 'day' : 'week';
 
     Promise.all([
-      core.getModuleVolume(db, selectedId, start, end, groupBy),
-      core.getMetricTrend(db, selectedId, start, end),
-      core.getConsistencyGrid(db, selectedId),
-      core.getCircadianDistribution(db, start, end, selectedId),
-      core.getRawLedger(db, selectedId, { page: 1, pageSize: 50, startDate: start, endDate: end }),
+      core.getModuleVolume(db as any, selectedId, start, end, groupBy),
+      core.getMetricTrend(db as any, selectedId, start, end),
+      core.getConsistencyGrid(db as any, selectedId),
+      core.getCircadianDistribution(db as any, start, end, selectedId),
+      core.getRawLedger(db as any, selectedId, { page: 1, pageSize: 50, startDate: start, endDate: end }),
       loadGoalMetrics(db, selectedId),
     ]).then(([vol, trend, consistency, circadian, ledger, goal]) => {
-      setVolumeData(vol);
-      setTrendData(trend);
-      setConsistencyData(consistency);
-      setCircadianData(circadian);
-      setLedgerData(ledger);
-      setGoalMetrics(goal);
+      setVolumeData(vol as unknown as VolumeData);
+      setTrendData(trend as TrendData);
+      setConsistencyData(consistency as ConsistencyData);
+      setCircadianData(circadian as CircadianData);
+      setLedgerData(ledger as LedgerData);
+      setGoalMetrics(goal as GoalMetrics);
       setLedgerPage(1);
     }).catch(console.error);
   }, [db, ready, selectedId, timeRange]);
-
-  async function loadGoalMetrics(database: any, moduleId: string) {
-    const goals = await core.getGoalsForModule(database, moduleId);
-    if (goals.length === 0) return null;
-    const sorted = [...goals].sort((a: any, b: any) => b.createdAt.localeCompare(a.createdAt));
-    return core.calculateGoalMetrics(database, sorted[0].id);
-  }
 
   const handleLoadMoreLedger = useCallback(async () => {
     if (!db || !selectedId || !ledgerData?.hasMore) return;
     const { start, end } = getDateRange(timeRange);
     const nextPage = ledgerPage + 1;
-    const more = await core.getRawLedger(db, selectedId, { page: nextPage, pageSize: 50, startDate: start, endDate: end });
-    setLedgerData({ ...more, entries: [...(ledgerData?.entries ?? []), ...more.entries] });
+    const more = (await core.getRawLedger(db as any, selectedId, { page: nextPage, pageSize: 50, startDate: start, endDate: end })) as LedgerData;
+    setLedgerData({ ...more, entries: [...(ledgerData?.entries ?? []), ...(more.entries ?? [])] });
     setLedgerPage(nextPage);
   }, [db, selectedId, ledgerData, ledgerPage, timeRange]);
 
@@ -111,7 +169,7 @@ export function StatisticsPage() {
     async (query: string) => {
       if (!db || !selectedId) return;
       const { start, end } = getDateRange(timeRange);
-      const results = await core.getRawLedger(db, selectedId, { page: 1, pageSize: 50, search: query || undefined, startDate: start, endDate: end });
+      const results = (await core.getRawLedger(db as any, selectedId, { page: 1, pageSize: 50, search: query || undefined, startDate: start, endDate: end })) as LedgerData;
       setLedgerData(results);
       setLedgerPage(1);
     },
@@ -186,20 +244,23 @@ export function StatisticsPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             {/* Goal Summary */}
             {goalMetrics && (
-              <GoalSummaryCard
-                label={goalMetrics.label}
-                unit={goalMetrics.unit}
-                startValue={goalMetrics.startValue}
-                targetValue={goalMetrics.targetValue}
-                currentValue={goalMetrics.currentValue}
-                requiredDailyRate={goalMetrics.requiredDailyRate}
-                actualDailyRate={goalMetrics.actualDailyRate}
-                adjustedDailyRate={goalMetrics.adjustedDailyRate}
-                daysRemaining={goalMetrics.daysRemaining}
-                progressFraction={goalMetrics.progressFraction}
-                isAhead={goalMetrics.isAhead}
-                gapFromLinear={goalMetrics.gapFromLinear}
-              />
+              (() => {
+                const gm = {
+                  label: goalMetrics.label ?? '',
+                  unit: (goalMetrics.unit as string) ?? 'count',
+                  startValue: goalMetrics.startValue ?? 0,
+                  targetValue: goalMetrics.targetValue ?? 0,
+                  currentValue: goalMetrics.currentValue ?? null,
+                  requiredDailyRate: goalMetrics.requiredDailyRate ?? 0,
+                  actualDailyRate: goalMetrics.actualDailyRate ?? 0,
+                  adjustedDailyRate: goalMetrics.adjustedDailyRate ?? null,
+                  daysRemaining: goalMetrics.daysRemaining ?? 0,
+                  progressFraction: goalMetrics.progressFraction ?? 0,
+                  isAhead: goalMetrics.isAhead ?? false,
+                  gapFromLinear: goalMetrics.gapFromLinear ?? 0,
+                };
+                return <GoalSummaryCard {...gm} />;
+              })()
             )}
 
             {/* Two-column layout */}
@@ -208,9 +269,9 @@ export function StatisticsPage() {
               {volumeData && (
                 <div className="card" style={{ padding: 16 }}>
                   <VolumeBarChart
-                    bars={volumeData.bars}
-                    unit={volumeData.unit}
-                    label={`${volumeData.label} — Volume`}
+                    bars={(volumeData.bars as any[]).map((b) => ({ period: (b.period ?? b.label ?? ''), volume: (b.volume ?? b.value ?? 0) })) as Array<{ period: string; volume: number }>}
+                    unit={((volumeData.unit as unknown) as 'minutes' | 'count') ?? 'count'}
+                    label={`${volumeData.label ?? ''} — Volume`}
                   />
                 </div>
               )}
@@ -242,7 +303,7 @@ export function StatisticsPage() {
               )}
 
               {/* Circadian Clock */}
-              {circadianData && circadianData.totalSessions > 0 && (
+              {circadianData && (circadianData.totalSessions ?? 0) > 0 && (
                 <div className="card" style={{ padding: 16 }}>
                   <CircadianClock
                     buckets={circadianData.buckets}

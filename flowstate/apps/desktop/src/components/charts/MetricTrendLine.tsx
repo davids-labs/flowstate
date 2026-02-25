@@ -1,7 +1,7 @@
 /**
  * MetricTrendLine — line graph with data peeking and goal ghost line overlay.
  */
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 interface MetricTrendLineProps {
   points: Array<{ date: string; value: number; loggedAt?: string }>;
@@ -71,9 +71,9 @@ export function MetricTrendLineChart({
           <YAxis fontSize={11} tick={{ fill: 'var(--muted)' }} />
           <Tooltip
             contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13 }}
-            formatter={(value: any, name?: string) => {
+            formatter={(value: number | string | undefined, name?: string) => {
               const label = name === 'target' ? 'Target' : 'Actual';
-              return [`${value}${unit ? ` ${unit}` : ''}`, label];
+              return [`${value ?? ''}${unit ? ` ${unit}` : ''}`, label];
             }}
           />
           {/* Ghost line (target path) */}
