@@ -1,0 +1,3 @@
+{
+  "extends": "./apps/mobile/tsconfig.json"
+}

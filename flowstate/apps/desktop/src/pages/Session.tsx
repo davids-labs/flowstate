@@ -18,19 +18,19 @@ export function SessionPage() {
   const ready = useDatabaseReady();
 
   const phase = useTimerStore((s) => s.phase);
-  const remaining = useTimerStore((s) => s.remaining);
-  const progress = useTimerStore((s) => s.progress);
   const blockIndex = useTimerStore((s) => s.blockIndex);
   const totalBlocks = useTimerStore((s) => s.totalBlocks);
   const currentBlockName = useTimerStore((s) => s.currentBlockName);
   const routineName = useTimerStore((s) => s.routineName);
-  const isOverdue = useTimerStore((s) => s.isOverdue);
   const init = useTimerStore((s) => s.init);
   const play = useTimerStore((s) => s.play);
   const pause = useTimerStore((s) => s.pause);
   const resume = useTimerStore((s) => s.resume);
   const skip = useTimerStore((s) => s.skip);
   const end = useTimerStore((s) => s.end);
+  const remaining = useTimerStore((s) => s._engine?.remaining ?? 0);
+  const progress = useTimerStore((s) => s._engine?.progress ?? 0);
+  const isOverdue = useTimerStore((s) => s._engine?.isOverdue ?? false);
 
   const [loaded, setLoaded] = useState(false);
 

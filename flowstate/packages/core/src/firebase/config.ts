@@ -61,5 +61,5 @@ export function getAuthInstance(): Auth {
     _auth = getAuth(getAppInstance());
   }
 
-  return _auth;
+  return _auth as Auth;
 }

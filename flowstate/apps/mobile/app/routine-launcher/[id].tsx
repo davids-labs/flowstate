@@ -99,36 +99,21 @@ export default function RoutineLauncherScreen() {
     }
   }, [started]);
 
-  // Timer state
-  const {
-    phase,
-    blockIndex,
-    totalBlocks,
-    currentBlockName,
-    init,
-    play,
-    pause,
-    resume,
-    skip,
-    end,
-    engine,
-  } = useTimerStore((s) => ({
-    phase: s.phase,
-    blockIndex: s.blockIndex,
-    totalBlocks: s.totalBlocks,
-    currentBlockName: s.currentBlockName,
-    init: s.init,
-    play: s.play,
-    pause: s.pause,
-    resume: s.resume,
-    skip: s.skip,
-    end: s.end,
-    engine: s._engine,
-  }));
+  // Timer state (select primitives individually to keep selectors stable)
+  const phase = useTimerStore((s) => s.phase);
+  const blockIndex = useTimerStore((s) => s.blockIndex);
+  const totalBlocks = useTimerStore((s) => s.totalBlocks);
+  const currentBlockName = useTimerStore((s) => s.currentBlockName);
+  const init = useTimerStore((s) => s.init);
+  const play = useTimerStore((s) => s.play);
+  const pause = useTimerStore((s) => s.pause);
+  const resume = useTimerStore((s) => s.resume);
+  const skip = useTimerStore((s) => s.skip);
+  const end = useTimerStore((s) => s.end);
 
-  const remaining = engine?.remaining ?? 0;
-  const progress = engine?.progress ?? 0;
-  const isOverdue = engine?.isOverdue ?? false;
+  const remaining = useTimerStore((s) => s._engine?.remaining ?? 0);
+  const progress = useTimerStore((s) => s._engine?.progress ?? 0);
+  const isOverdue = useTimerStore((s) => s._engine?.isOverdue ?? false);
 
   // Load module → routine → blocks
   useEffect(() => {

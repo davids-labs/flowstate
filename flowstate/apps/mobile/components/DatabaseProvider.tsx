@@ -365,6 +365,8 @@ export function DatabaseProvider({ children }: { children: React.ReactNode }) {
     };
   }, [retryCount]);
 
+  const contextValue = React.useMemo(() => ({ db, isReady }), [db, isReady]);
+
   if (error) {
     return (
       <View style={styles.container}>
@@ -387,7 +389,7 @@ export function DatabaseProvider({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <DatabaseContext.Provider value={{ db, isReady }}>
+    <DatabaseContext.Provider value={contextValue}>
       {children}
     </DatabaseContext.Provider>
   );
@@ -399,10 +401,12 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingTop: 40,
+    paddingBottom: 40,
   },
   loadingText: {
-    marginTop: 12,
     color: colors.textSecondary,
+    marginTop: 16,
     fontSize: 14,
   },
   errorText: {

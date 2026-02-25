@@ -192,9 +192,15 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
         }
       })();
 
-      // Track pending queue
+      // Track pending queue, throttle updates
+      let lastCount = manager.pendingCount;
+      setPendingCount(lastCount);
       const interval = setInterval(() => {
-        setPendingCount(manager.pendingCount);
+        const newCount = manager.pendingCount;
+        if (newCount !== lastCount) {
+          setPendingCount(newCount);
+          lastCount = newCount;
+        }
       }, 10_000);
 
       return () => {
@@ -208,7 +214,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     }
   }, [isAuthenticated, db, isReady]);
 
-  const value: SyncContextValue = {
+  const value: SyncContextValue = React.useMemo(() => ({
     isAuthenticated,
     isSyncing,
     uid,
@@ -225,7 +231,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     syncSession: (sessionId, data) => {
       pushSession(sessionId, data).catch(() => {});
     },
-  };
+  }), [isAuthenticated, isSyncing, uid, pendingCount]);
 
   return (
     <SyncContext.Provider value={value}>{children}</SyncContext.Provider>

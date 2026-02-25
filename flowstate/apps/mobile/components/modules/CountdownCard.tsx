@@ -3,7 +3,7 @@ import { View, Text, StyleSheet } from 'react-native';
 import { fontSize, spacing, borderRadius } from '../../constants/theme';
 import { useTheme } from '../../constants/ThemeContext';
 
-type DisplayMode = 'days' | 'dhms' | 'auto';
+type DisplayMode = 'days' | 'dhms' | 'weeks' | 'auto';
 
 interface CountdownCardProps {
   label: string;

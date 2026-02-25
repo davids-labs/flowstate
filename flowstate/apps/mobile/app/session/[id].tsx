@@ -70,45 +70,24 @@ export default function SessionScreen() {
   const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Timer store core values + actions
-  const {
-    phase,
-    blockIndex,
-    totalBlocks,
-    currentBlockName,
-    pausedAt,
-    blockDurationMs,
-    init,
-    restore,
-    play,
-    pause,
-    resume,
-    skip,
-    end,
-  } = useTimerStore((s) => ({
-    phase: s.phase,
-    blockIndex: s.blockIndex,
-    totalBlocks: s.totalBlocks,
-    currentBlockName: s.currentBlockName,
-    pausedAt: s.pausedAt,
-    blockDurationMs: s.blockDurationMs,
-    init: s.init,
-    restore: s.restore,
-    play: s.play,
-    pause: s.pause,
-    resume: s.resume,
-    skip: s.skip,
-    end: s.end,
-  }));
+  const phase = useTimerStore((s) => s.phase);
+  const blockIndex = useTimerStore((s) => s.blockIndex);
+  const totalBlocks = useTimerStore((s) => s.totalBlocks);
+  const currentBlockName = useTimerStore((s) => s.currentBlockName);
+  const pausedAt = useTimerStore((s) => s.pausedAt);
+  const blockDurationMs = useTimerStore((s) => s.blockDurationMs);
+  const init = useTimerStore((s) => s.init);
+  const restore = useTimerStore((s) => s.restore);
+  const play = useTimerStore((s) => s.play);
+  const pause = useTimerStore((s) => s.pause);
+  const resume = useTimerStore((s) => s.resume);
+  const skip = useTimerStore((s) => s.skip);
+  const end = useTimerStore((s) => s.end);
 
   // Derived values from engine (not part of Zustand state)
-  const { remaining, progress, isOverdue } = useTimerStore((state) => {
-    const engine = state._engine;
-    return {
-      remaining: engine?.remaining ?? 0,
-      progress: engine?.progress ?? 0,
-      isOverdue: engine?.isOverdue ?? false,
-    };
-  });
+  const remaining = useTimerStore((state) => state._engine?.remaining ?? 0);
+  const progress = useTimerStore((state) => state._engine?.progress ?? 0);
+  const isOverdue = useTimerStore((state) => state._engine?.isOverdue ?? false);
 
   const ringColor = isOverdue ? themeColors.danger : themeColors.accent;
 
@@ -127,9 +106,13 @@ export default function SessionScreen() {
       }
 
       const siblings = await getSessions(db, sess.dayPlanId);
-      setAllSessions(siblings);
+      // Only update allSessions and currentSessionIndex if changed — use functional updates
+      setAllSessions((prev) => {
+        const isDifferent = prev.length !== siblings.length || siblings.some((s: any, i: number) => s.id !== prev[i]?.id);
+        return isDifferent ? siblings : prev;
+      });
       const idx = siblings.findIndex((s: any) => s.id === targetId);
-      if (idx >= 0) setCurrentSessionIndex(idx);
+      if (idx >= 0) setCurrentSessionIndex((prev) => (idx !== prev ? idx : prev));
 
       let blocks: SessionBlock[] = [];
       try {
@@ -205,30 +188,38 @@ export default function SessionScreen() {
   }, [syncTimerState]);
 
   // Navigation between sessions
+  const navigateDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const navigateToSession = useCallback(async (targetIndex: number) => {
     const target = allSessions[targetIndex];
     if (!target) return;
 
-    if (phase === 'running' || phase === 'paused' || phase === 'overdue') {
-      await persistTimerState('in_progress');
+    // Debounce navigation
+    if (navigateDebounceRef.current) {
+      clearTimeout(navigateDebounceRef.current);
     }
-    if (typeof end === 'function') await end();
+    navigateDebounceRef.current = setTimeout(async () => {
+      if (phase === 'running' || phase === 'paused' || phase === 'overdue') {
+        await persistTimerState('in_progress');
+      }
+      if (typeof end === 'function') await end();
 
-    try {
-      await stopBackgroundTimer();
-      await cancelTimerNotifications();
-    } catch (e) {
-      // ignore
-    }
+      try {
+        await stopBackgroundTimer();
+        await cancelTimerNotifications();
+      } catch (e) {
+        // ignore
+      }
 
-    try {
-      await AsyncStorage.removeItem('flowstate_timer_state');
-    } catch (e) {}
+      try {
+        await AsyncStorage.removeItem('flowstate_timer_state');
+      } catch (e) {}
 
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setCurrentSessionIndex(targetIndex);
-    setLoading(true);
-    await loadSessionData(target.id);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      setCurrentSessionIndex(targetIndex);
+      setLoading(true);
+      await loadSessionData(target.id);
+    }, 200);
   }, [allSessions, phase, persistTimerState, end, loadSessionData]);
 
   // Live pause duration
