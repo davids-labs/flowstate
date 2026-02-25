@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { create } from 'zustand';
 import * as queries from '@flowstate/core';
 
@@ -37,7 +36,7 @@ export const useModuleStore = create<ModuleStoreState>((set, get) => ({
   loadModules: async (db) => {
     set({ isLoading: true });
     try {
-      const specs = (await queries.getModuleSpecs(db as any)) as ModuleSpecEntry[];
+      const specs = (await queries.getModuleSpecs(db as unknown)) as ModuleSpecEntry[];
       set({ modules: specs.filter((m) => !m.archivedAt), isLoading: false });
     } catch (err) {
       console.error('Failed to load modules:', err);
@@ -47,7 +46,7 @@ export const useModuleStore = create<ModuleStoreState>((set, get) => ({
 
   createModule: async (db, module) => {
     try {
-      await queries.createModuleSpec(db as any, module);
+      await queries.createModuleSpec(db as unknown, module);
       set((state) => ({ modules: [...state.modules, module] }));
     } catch (err) {
       console.error('Failed to create module:', err);
@@ -59,7 +58,7 @@ export const useModuleStore = create<ModuleStoreState>((set, get) => ({
       modules: state.modules.map((m) => (m.id === id ? { ...m, ...data } : m)),
     }));
     try {
-      await queries.updateModuleSpec(db as any, id, data);
+      await queries.updateModuleSpec(db as unknown, id, data);
     } catch (err) {
       console.error('Failed to update module:', err);
     }
@@ -68,7 +67,7 @@ export const useModuleStore = create<ModuleStoreState>((set, get) => ({
   archiveModule: async (db, id) => {
     set((state) => ({ modules: state.modules.filter((m) => m.id !== id) }));
     try {
-      await queries.updateModuleSpec(db as any, id, { archivedAt: new Date().toISOString() });
+      await queries.updateModuleSpec(db as unknown, id, { archivedAt: new Date().toISOString() });
     } catch (err) {
       console.error('Failed to archive module:', err);
     }
@@ -77,7 +76,7 @@ export const useModuleStore = create<ModuleStoreState>((set, get) => ({
   deleteModule: async (db, id) => {
     set((state) => ({ modules: state.modules.filter((m) => m.id !== id) }));
     try {
-      await queries.deleteModuleSpec(db as any, id);
+      await queries.deleteModuleSpec(db as unknown, id);
     } catch (err) {
       console.error('Failed to delete module:', err);
     }

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { Clock, PlayCircle, Target, TrendingUp } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useDatabaseReady, useDatabase } from '../components/useDatabase';
@@ -24,8 +24,6 @@ export function HomePage() {
   const navigate = useNavigate();
   const db = useDatabase();
   const ready = useDatabaseReady();
-  const [liveModules, setLiveModules] = useState<LiveModule[]>([]);
-  const [loggedModules, setLoggedModules] = useState<LoggedModule[]>([]);
   const [sessionsCompleted, setSessionsCompleted] = useState(0);
   const [sessionsTotal, setSessionsTotal] = useState(0);
 
@@ -48,10 +46,9 @@ export function HomePage() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Resolve live modules
-  useEffect(() => {
+  const liveModules = useMemo(() => {
     const live = getLiveModules();
-    const resolved: LiveModule[] = live.map((m) => {
+    return live.map((m) => {
       const mv = moduleValues.find((v) => v.moduleId === m.id);
       let value = mv?.value ?? '';
       if (m.type === 'countdown') {
@@ -69,11 +66,9 @@ export function HomePage() {
       }
       return { id: m.id, label: m.label, emoji: m.emoji, type: m.type, value };
     });
-    setLiveModules(resolved);
-  }, [modules, moduleValues, getLiveModules]);
+  }, [moduleValues, modules, getLiveModules]);
 
-  // Resolve logged modules
-  useEffect(() => {
+  const loggedModules = useMemo(() => {
     const logged: LoggedModule[] = [];
     for (const mv of moduleValues) {
       const spec = modules.find((m) => m.id === mv.moduleId);
@@ -81,7 +76,7 @@ export function HomePage() {
         logged.push({ id: spec.id, label: spec.label, value: mv.value });
       }
     }
-    setLoggedModules(logged);
+    return logged;
   }, [modules, moduleValues]);
 
   // Load sessions
