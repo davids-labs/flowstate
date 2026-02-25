@@ -1,9 +1,6 @@
-import React, { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
+import React, { useState, useEffect, type ReactNode } from 'react';
 import { initDatabase } from '../db';
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const DatabaseContext = createContext<any>(null);
-const ReadyContext = createContext<boolean>(false);
+import { DatabaseContext, ReadyContext } from './databaseContext';
 
 export function DatabaseProvider({ children }: { children: ReactNode }) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -30,13 +27,3 @@ export function DatabaseProvider({ children }: { children: ReactNode }) {
   );
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function useDatabase(): any {
-  const db = useContext(DatabaseContext);
-  if (!db) throw new Error('useDatabase must be used within DatabaseProvider');
-  return db;
-}
-
-export function useDatabaseReady(): boolean {
-  return useContext(ReadyContext);
-}

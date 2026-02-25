@@ -25,14 +25,10 @@ interface DayStoreState {
   moduleValues: ModuleValueEntry[];
   isLoading: boolean;
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  loadDay: (db: any, date: string) => Promise<void>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  toggleMustDo: (db: any, index: number) => Promise<void>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  setModuleValue: (db: any, moduleId: string, value: string) => Promise<void>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  rolloverMustDos: (db: any) => Promise<void>;
+  loadDay: (db: unknown, date: string) => Promise<void>;
+  toggleMustDo: (db: unknown, index: number) => Promise<void>;
+  setModuleValue: (db: unknown, moduleId: string, value: string) => Promise<void>;
+  rolloverMustDos: (db: unknown) => Promise<void>;
 }
 
 function todayDate(): string {
@@ -48,13 +44,11 @@ export const useDayStore = create<DayStoreState>((set, get) => ({
   loadDay: async (db, date) => {
     set({ isLoading: true, date });
     try {
-      const plan = await queries.getDayPlan(db, date);
-      const values = await queries.getModuleValuesForDate(db, date);
+      const plan = (await queries.getDayPlan(db as unknown, date)) as DayPlanData | null;
+      const values = (await queries.getModuleValuesForDate(db as unknown, date)) as Array<{ moduleId: string; value: string }>;
       set({
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        dayPlan: plan as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        moduleValues: values.map((v: any) => ({ moduleId: v.moduleId, value: v.value })),
+        dayPlan: plan,
+        moduleValues: values.map((v) => ({ moduleId: v.moduleId, value: v.value })),
         isLoading: false,
       });
     } catch (err) {
@@ -72,7 +66,7 @@ export const useDayStore = create<DayStoreState>((set, get) => ({
     set({ dayPlan: { ...dayPlan, mustDoDone: newDone } });
 
     try {
-      await queries.updateMustDoDone(db, dayPlan.id, newDone);
+      await queries.updateMustDoDone(db as unknown, dayPlan.id, newDone);
     } catch (err) {
       console.error('Failed to update must-do:', err);
     }
@@ -87,7 +81,7 @@ export const useDayStore = create<DayStoreState>((set, get) => ({
       set({ moduleValues: [...moduleValues, { moduleId, value }] });
     }
     try {
-      await queries.upsertModuleValue(db, { moduleId, date, value });
+      await queries.upsertModuleValue(db as unknown, { moduleId, date, value });
     } catch (err) {
       console.error('Failed to save module value:', err);
     }
@@ -107,7 +101,7 @@ export const useDayStore = create<DayStoreState>((set, get) => ({
       const yesterdayStr = yesterday.toISOString().slice(0, 10);
       const today = todayDate();
 
-      const yesterdayPlan = await queries.getDayPlan(db, yesterdayStr);
+      const yesterdayPlan = (await queries.getDayPlan(db as unknown, yesterdayStr)) as DayPlanData | null;
       if (!yesterdayPlan) return;
 
       const mustDo: string[] = (yesterdayPlan as DayPlanData).mustDo ?? [];
@@ -115,7 +109,7 @@ export const useDayStore = create<DayStoreState>((set, get) => ({
       const unchecked = mustDo.filter((_: string, i: number) => !mustDoDone[i]);
       if (unchecked.length === 0) return;
 
-      const todayPlan = await queries.getDayPlan(db, today);
+      const todayPlan = (await queries.getDayPlan(db as unknown, today)) as DayPlanData | null;
 
       if (todayPlan) {
         const existingMustDo: string[] = (todayPlan as DayPlanData).mustDo ?? [];
@@ -123,7 +117,7 @@ export const useDayStore = create<DayStoreState>((set, get) => ({
         const newItems = unchecked.filter((item: string) => !existingMustDo.includes(item));
         if (newItems.length === 0) return;
 
-        await queries.upsertDayPlan(db, {
+        await queries.upsertDayPlan(db as unknown, {
           date: today,
           title: (todayPlan as DayPlanData).title,
           mustDo: [...existingMustDo, ...newItems],
@@ -131,7 +125,7 @@ export const useDayStore = create<DayStoreState>((set, get) => ({
           moduleIds: (todayPlan as DayPlanData).moduleIds,
         });
       } else {
-        await queries.upsertDayPlan(db, {
+        await queries.upsertDayPlan(db as unknown, {
           date: today,
           title: 'Day Plan',
           mustDo: unchecked,

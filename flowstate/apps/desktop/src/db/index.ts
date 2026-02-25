@@ -253,6 +253,7 @@ export async function initDatabase(): Promise<ReturnType<typeof drizzle>> {
 
   ensureTables(_sqlDb);
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   _drizzleDb = drizzle(_sqlDb, { schema: schema as any });
 
   // Auto-save after every query via proxy
@@ -260,9 +261,9 @@ export async function initDatabase(): Promise<ReturnType<typeof drizzle>> {
   const handler: ProxyHandler<typeof originalDb> = {
     get(target, prop, receiver) {
       const val = Reflect.get(target, prop, receiver);
-      if (typeof val === 'function') {
+        if (typeof val === 'function') {
         return (...args: unknown[]) => {
-          const result = (val as Function).apply(target, args);
+          const result = (val as (...a: unknown[]) => unknown).apply(target, args);
           // Schedule save after mutations (insert, update, delete)
           if (['insert', 'update', 'delete'].includes(prop as string)) {
             scheduleSave();

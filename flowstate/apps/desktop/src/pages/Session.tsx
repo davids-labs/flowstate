@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Play, Pause, SkipForward, StopCircle } from 'lucide-react';
-import { useDatabaseReady, useDatabase } from '../components/DatabaseProvider';
+import { useDatabaseReady, useDatabase } from '../components/useDatabase';
 import { useTimerStore } from '../stores/timerStore';
 import * as queries from '@flowstate/core';
 
@@ -15,6 +15,7 @@ function formatTime(ms: number): string {
 export function SessionPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const db = useDatabase();
   const ready = useDatabaseReady();
 
   const phase = useTimerStore((s) => s.phase);
@@ -34,8 +35,7 @@ export function SessionPage() {
 
   const [loaded, setLoaded] = useState(false);
 
-  let db: any = null;
-  try { if (ready) db = useDatabase(); } catch { /* not ready */ }
+  
 
   const loadSession = useCallback(async () => {
     if (!db || !id || loaded) return;
@@ -43,11 +43,9 @@ export function SessionPage() {
       const session = await queries.getSession(db, id);
       if (!session) return;
 
-      const blocks = await queries.getRoutineBlocks(db, session.routineId);
-      const timerBlocks = blocks.map((b: any) => ({
-        name: b.name,
-        durationMinutes: b.durationMinutes,
-      }));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const blocks = (await queries.getRoutineBlocks(db as any, session.routineId)) as Array<{ name: string; durationMinutes: number }>;
+      const timerBlocks = blocks.map((b) => ({ name: b.name, durationMinutes: b.durationMinutes }));
 
       if (timerBlocks.length === 0) {
         timerBlocks.push({ name: session.routineName, durationMinutes: 25 });
@@ -63,7 +61,10 @@ export function SessionPage() {
     }
   }, [db, id, loaded, init]);
 
-  useEffect(() => { loadSession(); }, [loadSession]);
+  useEffect(() => {
+    const t = setTimeout(() => { void loadSession(); }, 0);
+    return () => clearTimeout(t);
+  }, [loadSession]);
 
   const handleEnd = async () => {
     end();

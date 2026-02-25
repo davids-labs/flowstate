@@ -20,16 +20,11 @@ interface ModuleStoreState {
   modules: ModuleSpecEntry[];
   isLoading: boolean;
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  loadModules: (db: any) => Promise<void>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  createModule: (db: any, module: ModuleSpecEntry) => Promise<void>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  updateModule: (db: any, id: string, data: Partial<ModuleSpecEntry>) => Promise<void>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  archiveModule: (db: any, id: string) => Promise<void>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  deleteModule: (db: any, id: string) => Promise<void>;
+  loadModules: (db: unknown) => Promise<void>;
+  createModule: (db: unknown, module: ModuleSpecEntry) => Promise<void>;
+  updateModule: (db: unknown, id: string, data: Partial<ModuleSpecEntry>) => Promise<void>;
+  archiveModule: (db: unknown, id: string) => Promise<void>;
+  deleteModule: (db: unknown, id: string) => Promise<void>;
   getByPlacement: (placement: string) => ModuleSpecEntry[];
   getLiveModules: () => ModuleSpecEntry[];
 }
@@ -41,9 +36,8 @@ export const useModuleStore = create<ModuleStoreState>((set, get) => ({
   loadModules: async (db) => {
     set({ isLoading: true });
     try {
-      const specs = await queries.getModuleSpecs(db);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      set({ modules: specs.filter((m: any) => !m.archivedAt), isLoading: false });
+      const specs = (await queries.getModuleSpecs(db as unknown)) as ModuleSpecEntry[];
+      set({ modules: specs.filter((m) => !m.archivedAt), isLoading: false });
     } catch (err) {
       console.error('Failed to load modules:', err);
       set({ isLoading: false });
@@ -52,7 +46,7 @@ export const useModuleStore = create<ModuleStoreState>((set, get) => ({
 
   createModule: async (db, module) => {
     try {
-      await queries.createModuleSpec(db, module);
+      await queries.createModuleSpec(db as unknown, module);
       set((state) => ({ modules: [...state.modules, module] }));
     } catch (err) {
       console.error('Failed to create module:', err);
@@ -64,7 +58,7 @@ export const useModuleStore = create<ModuleStoreState>((set, get) => ({
       modules: state.modules.map((m) => (m.id === id ? { ...m, ...data } : m)),
     }));
     try {
-      await queries.updateModuleSpec(db, id, data);
+      await queries.updateModuleSpec(db as unknown, id, data);
     } catch (err) {
       console.error('Failed to update module:', err);
     }
@@ -73,7 +67,7 @@ export const useModuleStore = create<ModuleStoreState>((set, get) => ({
   archiveModule: async (db, id) => {
     set((state) => ({ modules: state.modules.filter((m) => m.id !== id) }));
     try {
-      await queries.updateModuleSpec(db, id, { archivedAt: new Date().toISOString() });
+      await queries.updateModuleSpec(db as unknown, id, { archivedAt: new Date().toISOString() });
     } catch (err) {
       console.error('Failed to archive module:', err);
     }
@@ -82,7 +76,7 @@ export const useModuleStore = create<ModuleStoreState>((set, get) => ({
   deleteModule: async (db, id) => {
     set((state) => ({ modules: state.modules.filter((m) => m.id !== id) }));
     try {
-      await queries.deleteModuleSpec(db, id);
+      await queries.deleteModuleSpec(db as unknown, id);
     } catch (err) {
       console.error('Failed to delete module:', err);
     }

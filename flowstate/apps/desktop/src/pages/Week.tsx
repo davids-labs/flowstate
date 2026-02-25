@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Calendar } from 'lucide-react';
-import { useDatabaseReady, useDatabase } from '../components/DatabaseProvider';
+import { useDatabaseReady, useDatabase } from '../components/useDatabase';
 import * as queries from '@flowstate/core';
 
 interface WeekDay {
@@ -44,19 +44,28 @@ function getWeekRange(weekId: string): { start: string; end: string } {
 export function WeekPage() {
   const { weekId } = useParams<{ weekId: string }>();
   const navigate = useNavigate();
+  const db = useDatabase();
   const ready = useDatabaseReady();
   const [days, setDays] = useState<WeekDay[]>([]);
   const [narrative, setNarrative] = useState<string>('');
 
-  let db: any = null;
-  try { if (ready) db = useDatabase(); } catch { /* not ready */ }
+  
 
   const loadData = useCallback(async () => {
     if (!db || !weekId) return;
     try {
       const { start, end } = getWeekRange(weekId);
       const dbDays = await queries.getWeekDayPlans(db, start, end);
-      setDays(dbDays.map((d: any) => {
+      interface DBDay {
+        id: string;
+        date: string;
+        title: string;
+        dayNumber?: number;
+        mustDo?: string[] | string;
+        mustDoDone?: boolean[] | string;
+        status: string;
+      }
+      setDays(((dbDays as unknown) as DBDay[]).map((d) => {
         const mustDo = typeof d.mustDo === 'string' ? JSON.parse(d.mustDo) : (d.mustDo ?? []);
         const mustDoDone = typeof d.mustDoDone === 'string' ? JSON.parse(d.mustDoDone) : (d.mustDoDone ?? []);
         return {

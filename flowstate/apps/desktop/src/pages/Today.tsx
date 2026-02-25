@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { CheckSquare, Clock, PlayCircle, Square, Star } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { useDatabaseReady, useDatabase } from '../components/DatabaseProvider';
+import { useDatabaseReady, useDatabase } from '../components/useDatabase';
 import { useDayStore } from '../stores/dayStore';
 import * as queries from '@flowstate/core';
 
@@ -12,8 +12,16 @@ interface SessionRow {
   duration: number;
 }
 
+interface ModuleSpec {
+  id: string;
+  label: string;
+  emoji?: string | null;
+  type: string;
+}
+
 export function TodayPage() {
   const navigate = useNavigate();
+  const db = useDatabase();
   const ready = useDatabaseReady();
   const dayPlan = useDayStore((s) => s.dayPlan);
   const loadDay = useDayStore((s) => s.loadDay);
@@ -22,33 +30,37 @@ export function TodayPage() {
   const setModuleValue = useDayStore((s) => s.setModuleValue);
 
   const [sessions, setSessions] = useState<SessionRow[]>([]);
-  const [moduleSpecs, setModuleSpecs] = useState<any[]>([]);
+  const [moduleSpecs, setModuleSpecs] = useState<ModuleSpec[]>([]);
 
-  let db: any = null;
-  try { if (ready) db = useDatabase(); } catch { /* not ready */ }
+  
 
   const todayStr = new Date().toISOString().slice(0, 10);
 
   const loadData = useCallback(async () => {
     if (!db) return;
     await loadDay(db, todayStr);
-    const specs = await queries.getModuleSpecs(db);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const specs = (await queries.getModuleSpecs(db as any)) as ModuleSpec[];
     setModuleSpecs(specs);
   }, [db, todayStr, loadDay]);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => {
+    const t = setTimeout(() => { void loadData(); }, 0);
+    return () => clearTimeout(t);
+  }, [loadData]);
 
   // Load sessions
   useEffect(() => {
     if (!db || !dayPlan) return;
-    queries.getSessions(db, dayPlan.id).then((ss: any[]) => {
-      setSessions(ss.map((s: any) => ({
-        id: s.id,
-        routineName: s.routineName,
-        status: s.status,
-        duration: 0,
-      })));
-    }).catch(() => {});
+    (async () => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const ss = (await queries.getSessions(db as any, dayPlan.id)) as any[];
+        setSessions(ss.map((s) => ({ id: s.id, routineName: s.routineName, status: s.status, duration: 0 })));
+      } catch {
+        // ignore
+      }
+    })();
   }, [db, dayPlan]);
 
   if (!ready || !db) {
@@ -59,7 +71,7 @@ export function TodayPage() {
 
   // Day modules (from moduleIds on dayPlan)
   const dayModuleSpecs = dayPlan?.moduleIds
-    ? moduleSpecs.filter((m: any) => dayPlan.moduleIds.includes(m.id))
+    ? moduleSpecs.filter((m) => (dayPlan.moduleIds ?? []).includes(m.id))
     : [];
 
   return (
@@ -138,7 +150,7 @@ export function TodayPage() {
           {dayModuleSpecs.length > 0 && (
             <>
               <h3 className="section-title">Modules</h3>
-              {dayModuleSpecs.map((spec: any) => {
+              {dayModuleSpecs.map((spec) => {
                 const mv = moduleValues.find((v) => v.moduleId === spec.id);
                 return (
                   <div key={spec.id} className="card module-row">

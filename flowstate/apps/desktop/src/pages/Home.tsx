@@ -1,7 +1,7 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { Clock, PlayCircle, Target, TrendingUp } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { useDatabaseReady, useDatabase } from '../components/DatabaseProvider';
+import { useDatabaseReady, useDatabase } from '../components/useDatabase';
 import { useModuleStore } from '../stores/moduleStore';
 import { useDayStore } from '../stores/dayStore';
 import * as queries from '@flowstate/core';
@@ -22,11 +22,17 @@ interface LoggedModule {
 
 export function HomePage() {
   const navigate = useNavigate();
+  const db = useDatabase();
   const ready = useDatabaseReady();
-  const [liveModules, setLiveModules] = useState<LiveModule[]>([]);
-  const [loggedModules, setLoggedModules] = useState<LoggedModule[]>([]);
   const [sessionsCompleted, setSessionsCompleted] = useState(0);
   const [sessionsTotal, setSessionsTotal] = useState(0);
+
+  // current time tick for purity-safe date calculations in render
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const iv = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(iv);
+  }, []);
 
   const todayStr = new Date().toISOString().slice(0, 10);
 
@@ -38,9 +44,7 @@ export function HomePage() {
   const loadModules = useModuleStore((s) => s.loadModules);
   const getLiveModules = useModuleStore((s) => s.getLiveModules);
 
-  let db: ReturnType<typeof useDatabase> | null = null;
-  try { if (ready) db = useDatabase(); } catch { /* not ready */ }
-
+  
   const loadData = useCallback(async () => {
     if (!db) return;
     await loadModules(db);
@@ -49,32 +53,29 @@ export function HomePage() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Resolve live modules
-  useEffect(() => {
+  const liveModules = useMemo<LiveModule[]>(() => {
     const live = getLiveModules();
-    const resolved: LiveModule[] = live.map((m) => {
+    return live.map((m) => {
       const mv = moduleValues.find((v) => v.moduleId === m.id);
       let value = mv?.value ?? '';
       if (m.type === 'countdown') {
         const cfg = m.config as { targetDate?: string };
         if (cfg.targetDate) {
-          const diff = Math.ceil((new Date(cfg.targetDate).getTime() - Date.now()) / 86_400_000);
+          const diff = Math.ceil((new Date(cfg.targetDate).getTime() - now) / 86_400_000);
           value = String(Math.max(0, diff));
         }
       } else if (m.type === 'countup') {
         const cfg = m.config as { originDate?: string };
         if (cfg.originDate) {
-          const diff = Math.floor((Date.now() - new Date(cfg.originDate).getTime()) / 86_400_000);
+          const diff = Math.floor((now - new Date(cfg.originDate).getTime()) / 86_400_000);
           value = String(Math.max(0, diff));
         }
       }
       return { id: m.id, label: m.label, emoji: m.emoji, type: m.type, value };
     });
-    setLiveModules(resolved);
-  }, [modules, moduleValues, getLiveModules]);
+  }, [moduleValues, getLiveModules, now]);
 
-  // Resolve logged modules
-  useEffect(() => {
+  const loggedModules = useMemo(() => {
     const logged: LoggedModule[] = [];
     for (const mv of moduleValues) {
       const spec = modules.find((m) => m.id === mv.moduleId);
@@ -82,7 +83,7 @@ export function HomePage() {
         logged.push({ id: spec.id, label: spec.label, value: mv.value });
       }
     }
-    setLoggedModules(logged);
+    return logged;
   }, [modules, moduleValues]);
 
   // Load sessions
