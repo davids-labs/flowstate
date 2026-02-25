@@ -27,6 +27,13 @@ export function HomePage() {
   const [sessionsCompleted, setSessionsCompleted] = useState(0);
   const [sessionsTotal, setSessionsTotal] = useState(0);
 
+  // current time tick for purity-safe date calculations in render
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const iv = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(iv);
+  }, []);
+
   const todayStr = new Date().toISOString().slice(0, 10);
 
   // Must call hooks unconditionally
@@ -46,7 +53,7 @@ export function HomePage() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  const liveModules = useMemo(() => {
+  const liveModules = useMemo<LiveModule[]>(() => {
     const live = getLiveModules();
     return live.map((m) => {
       const mv = moduleValues.find((v) => v.moduleId === m.id);
@@ -54,19 +61,19 @@ export function HomePage() {
       if (m.type === 'countdown') {
         const cfg = m.config as { targetDate?: string };
         if (cfg.targetDate) {
-          const diff = Math.ceil((new Date(cfg.targetDate).getTime() - Date.now()) / 86_400_000);
+          const diff = Math.ceil((new Date(cfg.targetDate).getTime() - now) / 86_400_000);
           value = String(Math.max(0, diff));
         }
       } else if (m.type === 'countup') {
         const cfg = m.config as { originDate?: string };
         if (cfg.originDate) {
-          const diff = Math.floor((Date.now() - new Date(cfg.originDate).getTime()) / 86_400_000);
+          const diff = Math.floor((now - new Date(cfg.originDate).getTime()) / 86_400_000);
           value = String(Math.max(0, diff));
         }
       }
       return { id: m.id, label: m.label, emoji: m.emoji, type: m.type, value };
     });
-  }, [moduleValues, modules, getLiveModules]);
+  }, [moduleValues, getLiveModules, now]);
 
   const loggedModules = useMemo(() => {
     const logged: LoggedModule[] = [];
