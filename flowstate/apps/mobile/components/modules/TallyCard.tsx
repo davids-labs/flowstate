@@ -45,7 +45,7 @@ export function TallyCard({
   return (
     <View style={[styles.card, { backgroundColor: themeColors.surface }, atTarget && { borderWidth: 1, borderColor: themeColors.success }]}>
       <View style={styles.labelRow}>
-        {emoji && <Text style={styles.emoji}>{emoji}</Text>}
+        <Feather name={(emoji ? 'plus-square' : 'plus-square') as any} size={18} color={themeColors.accent} style={styles.icon} />
         <Text style={[styles.label, { color: themeColors.text }]}>{label}</Text>
         {target !== undefined && (
           <Text style={[styles.target, { color: themeColors.muted }, atTarget && { color: themeColors.success, fontWeight: '700' }]}>
@@ -100,6 +100,7 @@ const styles = StyleSheet.create({
   emoji: {
     fontSize: fontSize.lg,
   },
+  icon: { marginRight: spacing.xs },
   label: {
     flex: 1,
     fontSize: fontSize.md,

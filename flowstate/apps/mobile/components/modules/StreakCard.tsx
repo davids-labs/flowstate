@@ -24,9 +24,10 @@ export function StreakCard({
   const { themeColors } = useTheme();
   return (
     <View style={[styles.card, { backgroundColor: themeColors.surface }, compact && styles.cardCompact]}>
-      <Text style={[styles.label, { color: themeColors.muted }]}>
-        {emoji ? `${emoji}  ` : ''}{label}
-      </Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        <Feather name="award" size={14} color={themeColors.muted} style={styles.icon} />
+        <Text style={[styles.label, { color: themeColors.muted }]}>{label}</Text>
+      </View>
 
       <View style={styles.countRow}>
         <Text style={[styles.count, { color: themeColors.warning }]}>{currentStreak}</Text>
@@ -79,4 +80,5 @@ const styles = StyleSheet.create({
   bestText: {
     fontSize: fontSize.xs,
   },
+  icon: { marginRight: spacing.xs },
 });

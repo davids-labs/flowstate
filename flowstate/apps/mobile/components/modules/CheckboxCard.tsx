@@ -26,12 +26,13 @@ export function CheckboxCard({ label, emoji, checked, streak, onToggle }: Checkb
         <View style={[styles.checkbox, { borderColor: themeColors.muted }, checked && { backgroundColor: themeColors.accent, borderColor: themeColors.accent }]}>
           {checked && <Feather name="check" size={14} color={themeColors.white} />}
         </View>
-        <Text style={[styles.label, { color: themeColors.text }]}>
-          {emoji ? `${emoji}  ` : ''}{label}
-        </Text>
+        <Text style={[styles.label, { color: themeColors.text }]}>{label}</Text>
       </View>
       {streak !== undefined && streak > 0 && (
-        <Text style={[styles.streak, { color: themeColors.warning }]}>🔥 {streak} day streak</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: spacing.xs }}>
+          <Feather name="award" size={14} color={themeColors.warning} />
+          <Text style={[styles.streak, { color: themeColors.warning }]}>{streak} day streak</Text>
+        </View>
       )}
     </Pressable>
   );

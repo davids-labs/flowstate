@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, TextInput, StyleSheet } from 'react-native';
+import { Feather } from '@expo/vector-icons';
 import { fontSize, spacing, borderRadius } from '../../constants/theme';
 import { useTheme } from '../../constants/ThemeContext';
 
@@ -28,9 +29,10 @@ export function DataInputCard({
   if (compact) {
     return (
       <View style={[styles.card, { backgroundColor: themeColors.surface }]}>
-        <Text style={[styles.label, { color: themeColors.text }]}>
-          {emoji ? `${emoji}  ` : ''}{label}
-        </Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <Feather name="file-text" size={14} color={themeColors.text} style={styles.icon} />
+          <Text style={[styles.label, { color: themeColors.text }]}>{label}</Text>
+        </View>
         <Text style={[styles.compactValue, { color: themeColors.text }]}>
           {value.toLocaleString()} <Text style={[styles.unit, { color: themeColors.textSecondary }]}>/ {target.toLocaleString()} {unit}</Text>
         </Text>
@@ -43,9 +45,10 @@ export function DataInputCard({
 
   return (
     <View style={[styles.card, { backgroundColor: themeColors.surface }]}>
-      <Text style={[styles.label, { color: themeColors.text }]}>
-        {emoji ? `${emoji}  ` : ''}{label}
-      </Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        <Feather name="file-text" size={14} color={themeColors.text} style={styles.icon} />
+        <Text style={[styles.label, { color: themeColors.text }]}>{label}</Text>
+      </View>
       <View style={styles.inputRow}>
         <TextInput
           style={[styles.input, { backgroundColor: themeColors.background, borderColor: themeColors.surfaceBorder, color: themeColors.text }]}
@@ -103,6 +106,7 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
     fontWeight: '400',
   },
+  icon: { marginRight: spacing.xs },
   progressTrack: {
     height: 6,
     borderRadius: borderRadius.full,

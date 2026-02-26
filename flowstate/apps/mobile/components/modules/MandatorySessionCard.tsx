@@ -80,9 +80,7 @@ export function MandatorySessionCard({
   return (
     <Pressable style={[styles.card, { backgroundColor: themeColors.surface }, compact && styles.cardCompact]} onPress={handlePress}>
       <View style={styles.info}>
-        <Text style={[styles.label, { color: themeColors.text }]}>
-          {emoji ? `${emoji}  ` : ''}{label}
-        </Text>
+        <Text style={[styles.label, { color: themeColors.text }]}>{label}</Text>
         <Text style={[styles.routineName, { color: themeColors.muted }]}>{routineName}</Text>
       </View>
       <View style={[styles.statusBadge, { backgroundColor: config.bg }]}>

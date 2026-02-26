@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
+import { Feather } from '@expo/vector-icons';
 import { fontSize, spacing, borderRadius } from '../../constants/theme';
 import { useTheme } from '../../constants/ThemeContext';
 
@@ -44,9 +45,10 @@ export function ProgressBarCard({
 
   return (
     <View style={[styles.card, { backgroundColor: themeColors.surface }, compact && styles.cardCompact]}>
-      <Text style={[styles.label, { color: themeColors.text }]}>
-        {emoji ? `${emoji}  ` : ''}{label}
-      </Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        <Feather name="bar-chart-2" size={14} color={themeColors.text} style={styles.icon} />
+        <Text style={[styles.label, { color: themeColors.text }]}>{label}</Text>
+      </View>
 
       <View style={[styles.progressTrack, { backgroundColor: themeColors.surfaceBorder }]}>
         <View style={[styles.progressFill, { width: `${progress * 100}%`, backgroundColor: themeColors.accent }]} />
@@ -80,6 +82,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     marginBottom: spacing.sm,
   },
+  icon: { marginRight: spacing.xs },
   progressTrack: {
     height: 8,
     borderRadius: 4,

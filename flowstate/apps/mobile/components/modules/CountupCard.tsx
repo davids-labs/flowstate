@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
+import { Feather } from '@expo/vector-icons';
 import { fontSize, spacing, borderRadius } from '../../constants/theme';
 import { useTheme } from '../../constants/ThemeContext';
 
@@ -62,10 +63,10 @@ export function CountupCard({
 
   return (
     <View style={[styles.card, { backgroundColor: themeColors.surface }, compact && styles.cardCompact]}>
-      <Text style={[styles.label, { color: themeColors.textSecondary }]}>
-        {emoji ? `${emoji}  ` : ''}
-        {label}
-      </Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        <Feather name="clock" size={14} color={themeColors.textSecondary} style={styles.icon} />
+        <Text style={[styles.label, { color: themeColors.textSecondary }]}>{label}</Text>
+      </View>
       <Text style={[styles.count, { color: themeColors.accent }, compact && styles.countCompact]}>{primary}</Text>
       {unit ? <Text style={[styles.unit, { color: themeColors.muted }]}>{unit}</Text> : null}
     </View>
@@ -88,4 +89,5 @@ const styles = StyleSheet.create({
   count: { fontSize: fontSize.hero, fontWeight: '800' },
   countCompact: { fontSize: fontSize.xxl },
   unit: { fontSize: fontSize.xs, marginTop: 2 },
+  icon: { marginRight: 8 },
 });

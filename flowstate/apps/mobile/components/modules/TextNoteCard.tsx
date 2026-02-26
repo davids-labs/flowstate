@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, TextInput, StyleSheet } from 'react-native';
+import { Feather } from '@expo/vector-icons';
 import { fontSize, spacing, borderRadius } from '../../constants/theme';
 import { useTheme } from '../../constants/ThemeContext';
 
@@ -25,9 +26,10 @@ export function TextNoteCard({
   const { themeColors } = useTheme();
   return (
     <View style={[styles.card, { backgroundColor: themeColors.surface }, compact && styles.cardCompact]}>
-      <Text style={[styles.label, { color: themeColors.text }]}>
-        {emoji ? `${emoji}  ` : ''}{label}
-      </Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        <Feather name="file-text" size={14} color={themeColors.text} style={styles.icon} />
+        <Text style={[styles.label, { color: themeColors.text }]}>{label}</Text>
+      </View>
       <TextInput
         style={[styles.input, { backgroundColor: themeColors.background, borderColor: themeColors.border, color: themeColors.text }]}
         multiline
@@ -59,6 +61,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     marginBottom: spacing.sm,
   },
+  icon: { marginRight: spacing.xs },
   input: {
     borderRadius: borderRadius.sm,
     borderWidth: 1,

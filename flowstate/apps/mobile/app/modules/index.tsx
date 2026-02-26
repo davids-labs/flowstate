@@ -28,6 +28,23 @@ const TYPE_LABELS: Record<string, string> = {
   group: 'Group',
 };
 
+const TYPE_ICONS: Record<string, string> = {
+  countdown: 'clock',
+  countup: 'clock',
+  checkbox: 'check',
+  rating: 'star',
+  data_input: 'file-text',
+  mandatory_session: 'play',
+  text_note: 'file-text',
+  progress_bar: 'bar-chart-2',
+  streak_counter: 'award',
+  tally: 'plus-square',
+  photo_log: 'image',
+  routine_launcher: 'play',
+  timer: 'clock',
+  group: 'layers',
+};
+
 interface CollectionRow {
   id: string;
   name: string;
@@ -194,7 +211,7 @@ export default function ModulesScreen() {
       style={[styles.moduleRow, { backgroundColor: themeColors.surface }]}
       onPress={() => enterFolder(folder)}
     >
-      <Text style={styles.emoji}>{folder.emoji ?? '📁'}</Text>
+      <Feather name="folder" size={24} color={themeColors.accent} style={styles.icon} />
       <View style={styles.moduleInfo}>
         <Text style={[styles.moduleLabel, { color: themeColors.text }]}>{folder.name}</Text>
         <View style={styles.badges}>
@@ -225,7 +242,7 @@ export default function ModulesScreen() {
         );
       }}
     >
-      <Text style={styles.emoji}>{item.emoji ?? '📦'}</Text>
+      <Feather name={(TYPE_ICONS[item.type] ?? 'box') as any} size={24} color={themeColors.accent} style={styles.icon} />
       <View style={styles.moduleInfo}>
         <Text style={[styles.moduleLabel, { color: themeColors.text }]}>{item.label}</Text>
         <View style={styles.badges}>
@@ -287,7 +304,7 @@ export default function ModulesScreen() {
               style={[styles.moduleRow, styles.archivedRow, { backgroundColor: themeColors.surface }]}
               onPress={() => handleArchive(item.id, true)}
             >
-              <Text style={styles.emoji}>{item.emoji ?? '📦'}</Text>
+              <Feather name={(TYPE_ICONS[item.type] ?? 'box') as any} size={24} color={themeColors.muted} style={styles.icon} />
               <View style={styles.moduleInfo}>
                 <Text style={[styles.moduleLabel, { color: themeColors.muted }]}>{item.label}</Text>
                 <Text style={[styles.placementText, { color: themeColors.muted }]}>Tap to restore</Text>
@@ -323,6 +340,7 @@ const styles = StyleSheet.create({
   backText: { fontSize: fontSize.md, fontWeight: '600' },
   moduleRow: { flexDirection: 'row', alignItems: 'center', borderRadius: borderRadius.md, padding: spacing.md, marginBottom: spacing.sm },
   archivedRow: { opacity: 0.6 },
+  icon: { marginRight: spacing.md },
   emoji: { fontSize: 24, marginRight: spacing.md },
   moduleInfo: { flex: 1 },
   moduleLabel: { fontSize: fontSize.md, fontWeight: '600', marginBottom: 4 },

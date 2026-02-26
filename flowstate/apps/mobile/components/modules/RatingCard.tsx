@@ -21,9 +21,10 @@ export function RatingCard({ label, emoji, value, onRate }: RatingCardProps) {
 
   return (
     <View style={[styles.card, { backgroundColor: themeColors.surface }]}>
-      <Text style={[styles.label, { color: themeColors.text }]}>
-        {emoji ? `${emoji}  ` : ''}{label}
-      </Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        <Feather name="star" size={14} color={themeColors.text} style={styles.icon} />
+        <Text style={[styles.label, { color: themeColors.text }]}>{label}</Text>
+      </View>
       <View style={styles.stars}>
         {[1, 2, 3, 4, 5].map(star => (
           <Pressable key={star} onPress={() => handleTap(star)} hitSlop={4}>
@@ -54,4 +55,5 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: spacing.xs,
   },
+  icon: { marginRight: spacing.xs },
 });
