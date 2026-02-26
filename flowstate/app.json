@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "2f1700bd-3462-4b56-ab43-1169966df4fa"
+      }
+    },
+    "android": {
+      "package": "com.davidslabs.flowstate"
+    }
+  }
+}
