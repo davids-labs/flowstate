@@ -14,7 +14,7 @@ import { fontSize, spacing, borderRadius } from '../../constants/theme';
 import { useTheme } from '../../constants/ThemeContext';
 
 /** Wrapper that wires useModuleValue so each module card is interactive */
-function HomeModuleCard({ module, compact, widthStyle }: { module: any; compact?: boolean; widthStyle?: any }) {
+function HomeModuleCard({ module, compact, widthStyle, streak }: { module: any; compact?: boolean; widthStyle?: any; streak?: { currentStreak?: number; longestStreak?: number } }) {
   const { value, setValue } = useModuleValue(module.id);
   const config = module.config ?? {};
 
@@ -23,6 +23,10 @@ function HomeModuleCard({ module, compact, widthStyle }: { module: any; compact?
   if (module.type === 'checkbox') parsedValue = value === 'true' || value === '1';
   else if (module.type === 'rating' || module.type === 'data_input' || module.type === 'tally') parsedValue = parseNumber(value);
   else if (module.type === 'text_note' || module.type === 'photo_log') parsedValue = value ?? '';
+  // For streak modules, prefer DB-derived streaks when available
+  if (module.type === 'streak_counter' && typeof streak?.currentStreak === 'number') {
+    parsedValue = streak.currentStreak;
+  }
 
   return (
     <ModuleCard
@@ -208,7 +212,7 @@ export default function HomeScreen() {
               ]}
               onPress={() => router.push(`/modules/${m.id}`)}
             >
-              <HomeModuleCard module={m} compact />
+              <HomeModuleCard module={m} compact streak={streaks[m.id]} />
             </Pressable>
           ))}
         </View>
@@ -235,7 +239,7 @@ export default function HomeScreen() {
               styles.todayModuleCell,
               layoutWidths[m.id] === 2 && styles.todayModuleCellFull,
             ]}>
-              <HomeModuleCard module={m} />
+              <HomeModuleCard module={m} streak={streaks[m.id]} />
             </View>
           ))}
         </View>
@@ -279,7 +283,7 @@ export default function HomeScreen() {
               layoutWidths[m.id] === 2 && styles.logCellFull,
               !layoutWidths[m.id] && styles.logCellFull,
             ]}>
-              <HomeModuleCard module={m} />
+              <HomeModuleCard module={m} streak={streaks[m.id]} />
             </View>
           ))}
         </View>

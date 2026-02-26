@@ -24,13 +24,13 @@ import {
   getModuleSpecs, getSessionsForDay, getRoutine, getRoutineBlocks,
   getRoutines, createSession, upsertDayPlan, updateMustDoDone, deleteSession,
   autoFillDayPlan,
+  updateSession,
 } from "@flowstate/core";
 import { fontSize, spacing, borderRadius } from "../../constants/theme";
 import { useTheme } from "../../constants/ThemeContext";
 import { FlatList } from "react-native";
 
 type ViewMode = "list" | "timeline";
-
 export default function TodayScreen() {
   const router = useRouter();
   const { db, isReady } = useDatabaseSafe();
@@ -317,6 +317,17 @@ export default function TodayScreen() {
         </Text>
       )}
 
+      {dayPlan && (
+        <View style={[styles.planProgressTrack, { backgroundColor: themeColors.surface }]}> 
+          <View
+            style={[
+              styles.planProgressFill,
+              { backgroundColor: themeColors.accent, width: `${Math.min(100, Math.round(((dayPlan.dayNumber ?? 0) / (dayPlan.totalDays ?? 1)) * 100))}%` },
+            ]}
+          />
+        </View>
+      )}
+
       {!dayPlan && isReady && (
         <View style={[styles.emptyCard, { backgroundColor: themeColors.surface }]}>
           <Feather name="calendar" size={32} color={themeColors.muted} />
@@ -456,6 +467,21 @@ export default function TodayScreen() {
                     blockCount={s.blockCount ?? 0}
                     status={s.status}
                   />
+                </Pressable>
+                <Pressable
+                  style={styles.sessionCompleteBtn}
+                  onPress={async () => {
+                    if (!db) return;
+                    try {
+                      await updateSession(db, s.id, { status: 'completed', endedAt: new Date().toISOString() });
+                      await loadSessions();
+                    } catch (e) {
+                      console.error('Failed to quick-complete session:', e);
+                    }
+                  }}
+                  hitSlop={8}
+                >
+                  <Feather name="check" size={16} color={themeColors.success} />
                 </Pressable>
                 <Pressable
                   style={styles.sessionDeleteBtn}
@@ -734,6 +760,24 @@ const styles = StyleSheet.create({
   sessionDeleteBtn: {
     padding: spacing.sm,
     marginLeft: spacing.xs,
+  },
+  sessionCompleteBtn: {
+    padding: spacing.sm,
+    marginLeft: spacing.xs,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  planProgressTrack: {
+    height: 6,
+    borderRadius: borderRadius.full,
+    overflow: 'hidden',
+    width: '100%',
+    marginTop: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  planProgressFill: {
+    height: '100%',
+    borderRadius: borderRadius.full,
   },
   emptySlot: {
     flexDirection: "row",

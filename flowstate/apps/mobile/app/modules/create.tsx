@@ -11,19 +11,34 @@ import { fontSize, spacing, borderRadius } from '../../constants/theme';
 import { useTheme } from '../../constants/ThemeContext';
 
 const MODULE_TYPES = [
-  { value: 'countdown', label: 'Countdown', emoji: '⏳', desc: 'Count down to a target date' },
-  { value: 'countup', label: 'Countup', emoji: '📈', desc: 'Count up from an origin date' },
-  { value: 'checkbox', label: 'Checkbox', emoji: '✅', desc: 'Daily yes/no toggle' },
-  { value: 'rating', label: 'Rating', emoji: '⭐', desc: 'Rate on a 1–5 scale' },
-  { value: 'data_input', label: 'Data Input', emoji: '🔢', desc: 'Track a numeric value with target' },
-  { value: 'text_note', label: 'Text Note', emoji: '📝', desc: 'Free-text daily capture' },
-  { value: 'tally', label: 'Tally Counter', emoji: '🔄', desc: 'Simple +/- counter with persistence' },
-  { value: 'photo_log', label: 'Photo Log', emoji: '📸', desc: 'Capture daily progress photos' },
-  { value: 'progress_bar', label: 'Progress Bar', emoji: '📊', desc: 'Visual date-range progress' },
-  { value: 'streak_counter', label: 'Streak', emoji: '🔥', desc: 'Track consecutive completions' },
-  { value: 'group', label: 'Group', emoji: '📁', desc: 'Group related modules together' },
-  { value: 'routine_launcher', label: 'Routine Launcher', emoji: '🚀', desc: 'Launch a timed routine from your homescreen' },
+  { value: 'countdown', label: 'Countdown', desc: 'Count down to a target date' },
+  { value: 'countup', label: 'Countup', desc: 'Count up from an origin date' },
+  { value: 'checkbox', label: 'Checkbox', desc: 'Daily yes/no toggle' },
+  { value: 'rating', label: 'Rating', desc: 'Rate on a 1–5 scale' },
+  { value: 'data_input', label: 'Data Input', desc: 'Track a numeric value with target' },
+  { value: 'text_note', label: 'Text Note', desc: 'Free-text daily capture' },
+  { value: 'tally', label: 'Tally Counter', desc: 'Simple +/- counter with persistence' },
+  { value: 'photo_log', label: 'Photo Log', desc: 'Capture daily progress photos' },
+  { value: 'progress_bar', label: 'Progress Bar', desc: 'Visual date-range progress' },
+  { value: 'streak_counter', label: 'Streak', desc: 'Track consecutive completions' },
+  { value: 'group', label: 'Group', desc: 'Group related modules together' },
+  { value: 'routine_launcher', label: 'Routine Launcher', desc: 'Launch a timed routine from your homescreen' },
 ] as const;
+
+const TYPE_ICONS: Record<string, string> = {
+  countdown: 'clock',
+  countup: 'clock',
+  checkbox: 'check',
+  rating: 'star',
+  data_input: 'file-text',
+  text_note: 'file-text',
+  tally: 'plus-square',
+  photo_log: 'image',
+  progress_bar: 'bar-chart-2',
+  streak_counter: 'award',
+  group: 'layers',
+  routine_launcher: 'play',
+};
 
 const ALL_SURFACES = ['homescreen', 'day', 'session', 'plan', 'week'] as const;
 
@@ -209,7 +224,7 @@ export default function CreateModuleScreen() {
             style={[styles.typeRow, { backgroundColor: themeColors.surface }]}
             onPress={() => handleSelectType(t.value)}
           >
-            <Text style={styles.typeEmoji}>{t.emoji}</Text>
+            <Feather name={(TYPE_ICONS[t.value] ?? 'box') as any} size={28} color={themeColors.accent} style={styles.icon} />
             <View style={styles.typeInfo}>
               <Text style={[styles.typeLabel, { color: themeColors.text }]}>{t.label}</Text>
               <Text style={[styles.typeDesc, { color: themeColors.muted }]}>{t.desc}</Text>
@@ -236,10 +251,10 @@ export default function CreateModuleScreen() {
           onChangeText={setLabel}
         />
 
-        <Text style={[styles.fieldLabel, { color: themeColors.text }]}>Emoji</Text>
+        <Text style={[styles.fieldLabel, { color: themeColors.text }]}>Icon (optional)</Text>
         <TextInput
-          style={[styles.input, { width: 60, backgroundColor: themeColors.surface, borderColor: themeColors.border, color: themeColors.text }]}
-          placeholder="✈️"
+          style={[styles.input, { width: 80, backgroundColor: themeColors.surface, borderColor: themeColors.border, color: themeColors.text }]}
+          placeholder=""
           placeholderTextColor={themeColors.muted}
           value={emoji}
           onChangeText={setEmoji}
@@ -481,6 +496,7 @@ const styles = StyleSheet.create({
     fontSize: 28,
     marginRight: spacing.sm,
   },
+  icon: { marginRight: spacing.sm },
   typeInfo: {
     flex: 1,
   },

@@ -220,6 +220,15 @@ export default function DebriefScreen() {
         placeholderTextColor={themeColors.muted}
         value={notes}
         onChangeText={setNotes}
+        onBlur={async () => {
+          if (notes.trim() && db && sessionId) {
+            try {
+              await updateSession(db, sessionId, { notes: notes.trim() });
+            } catch (e) {
+              console.warn('Failed to save notes on blur:', e);
+            }
+          }
+        }}
         multiline
         textAlignVertical="top"
       />
