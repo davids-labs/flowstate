@@ -41,7 +41,7 @@ export function GoalProgressWidget({
         }}
       >
         <TextWidget
-          text="🎯 Goals"
+          text="Goals"
           style={{ fontSize: 13, color: '#8B8FA3' }}
         />
         <TextWidget
@@ -84,7 +84,7 @@ export function GoalProgressWidget({
                   }}
                 >
                   <TextWidget
-                    text={`${g.emoji ?? '📦'} ${g.label}`}
+                    text={`${g.label}`}
                     style={{ fontSize: 13, color: '#FFFFFF', fontWeight: '500' }}
                     maxLines={1}
                   />

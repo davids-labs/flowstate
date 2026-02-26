@@ -40,6 +40,23 @@ function computeCountup(originDate: string) {
   return { totalDays, years, remainingDays };
 }
 
+const TYPE_ICONS: Record<string, string> = {
+  countdown: 'clock',
+  countup: 'clock',
+  checkbox: 'check',
+  rating: 'star',
+  data_input: 'file-text',
+  mandatory_session: 'play',
+  text_note: 'file-text',
+  progress_bar: 'bar-chart-2',
+  streak_counter: 'award',
+  tally: 'plus-square',
+  photo_log: 'image',
+  routine_launcher: 'play',
+  timer: 'clock',
+  group: 'layers',
+};
+
 export default function ModuleDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
@@ -131,7 +148,7 @@ export default function ModuleDetailScreen() {
   const handleShare = async () => {
     if (!mod) return;
     const config = mod.config ?? {};
-    let msg = `${mod.emoji ?? ''} ${mod.label}`;
+    let msg = `${mod.label}`;
     if (mod.type === 'countdown' && config.targetDate) {
       const cd = computeCountdown(config.targetDate, config.startDate);
       msg += `\n${cd.days} days remaining`;
@@ -163,7 +180,7 @@ export default function ModuleDetailScreen() {
     return (
       <ScreenWrapper>
         <View style={styles.hero}>
-          <Text style={styles.heroEmoji}>{mod.emoji ?? '⏳'}</Text>
+          <Feather name={(TYPE_ICONS[mod.type] ?? 'clock') as any} size={48} color={themeColors.accent} style={{ marginBottom: spacing.sm }} />
           <Text style={[styles.heroLabel, { color: themeColors.muted }]}>{mod.label}</Text>
 
           {cd.isComplete ? (
@@ -241,7 +258,7 @@ export default function ModuleDetailScreen() {
     return (
       <ScreenWrapper>
         <View style={styles.hero}>
-          <Text style={styles.heroEmoji}>{mod.emoji ?? '📈'}</Text>
+          <Feather name={(TYPE_ICONS[mod.type] ?? 'clock') as any} size={48} color={themeColors.accent} style={{ marginBottom: spacing.sm }} />
           <Text style={[styles.heroLabel, { color: themeColors.muted }]}>{mod.label}</Text>
           <Text style={[styles.heroCount, { color: themeColors.accent }]}>{cu.totalDays}</Text>
           <Text style={[styles.heroUnit, { color: themeColors.text }]}>
@@ -295,7 +312,7 @@ export default function ModuleDetailScreen() {
   return (
     <ScreenWrapper>
       <View style={styles.hero}>
-        <Text style={styles.heroEmoji}>{mod.emoji ?? '📦'}</Text>
+        <Feather name={(TYPE_ICONS[mod.type] ?? 'box') as any} size={48} color={themeColors.accent} style={{ marginBottom: spacing.sm }} />
         <Text style={[styles.heroLabel, { color: themeColors.muted }]}>{mod.label}</Text>
         <Text style={[styles.heroType, { color: themeColors.muted }]}>{mod.type.replace('_', ' ')}</Text>
       </View>
