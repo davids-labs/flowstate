@@ -156,7 +156,7 @@ export function PhotoLogCard({
   return (
     <View style={[styles.card, { backgroundColor: themeColors.surface }]}>
       <View style={styles.labelRow}>
-        {emoji && <Text style={styles.emoji}>{emoji}</Text>}
+        <Feather name="image" size={18} color={themeColors.accent} style={styles.icon} />
         <Text style={[styles.label, { color: themeColors.text }]}>{label}</Text>
         <Text style={[styles.count, { color: themeColors.muted }]}>{photos.length}/{maxPhotosPerDay}</Text>
       </View>
@@ -210,6 +210,7 @@ const styles = StyleSheet.create({
   emoji: {
     fontSize: fontSize.lg,
   },
+  icon: { marginRight: spacing.xs },
   label: {
     flex: 1,
     fontSize: fontSize.md,

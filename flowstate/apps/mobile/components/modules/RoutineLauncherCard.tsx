@@ -81,7 +81,7 @@ export function RoutineLauncherCard({
     return (
       <Pressable style={[styles.cardCompact, { backgroundColor: themeColors.surface }, todayDone && styles.cardDone]} onPress={handlePress}>
         <View style={styles.compactRow}>
-          <Text style={styles.compactEmoji}>{emoji ?? '🚀'}</Text>
+          <Feather name="play" size={18} color={themeColors.accent} style={styles.icon} />
           <Text style={[styles.compactLabel, { color: themeColors.text }]} numberOfLines={1}>{label}</Text>
           {todayDone ? (
             <Feather name="check-circle" size={18} color={themeColors.success} />
@@ -102,7 +102,7 @@ export function RoutineLauncherCard({
     <Pressable style={[styles.card, { backgroundColor: themeColors.surface }, todayDone && styles.cardDone]} onPress={handlePress}>
       <View style={styles.header}>
         <View style={styles.titleRow}>
-          <Text style={styles.emoji}>{emoji ?? '🚀'}</Text>
+          <Feather name="play" size={28} color={themeColors.accent} style={styles.icon} />
           <View style={styles.titleInfo}>
             <Text style={[styles.label, { color: themeColors.text }]}>{label}</Text>
             <Text style={[styles.meta, { color: themeColors.muted }]}>{totalMinutes} min · {blocks.length} blocks</Text>
@@ -226,6 +226,7 @@ const styles = StyleSheet.create({
   compactEmoji: {
     fontSize: 18,
   },
+  icon: { marginRight: spacing.sm },
   compactLabel: {
     flex: 1,
     fontSize: fontSize.sm,

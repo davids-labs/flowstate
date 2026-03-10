@@ -28,6 +28,23 @@ const TYPE_LABELS: Record<string, string> = {
   group: 'Group',
 };
 
+const TYPE_ICONS: Record<string, string> = {
+  countdown: 'clock',
+  countup: 'clock',
+  checkbox: 'check',
+  rating: 'star',
+  data_input: 'file-text',
+  mandatory_session: 'play',
+  text_note: 'file-text',
+  progress_bar: 'bar-chart-2',
+  streak_counter: 'award',
+  tally: 'plus-square',
+  photo_log: 'image',
+  routine_launcher: 'play',
+  timer: 'clock',
+  group: 'layers',
+};
+
 interface CollectionRow {
   id: string;
   name: string;
@@ -93,53 +110,81 @@ export default function ModulesScreen() {
 
   useFocusEffect(useCallback(() => { loadData(); }, [loadData]));
 
+  // Only used for archive undo (archive is reversible, so deferred is safe)
+  const [undoToast, setUndoToast] = useState<{ message: string; undoAction: () => void } | null>(null);
+  const pendingArchiveRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     return () => {
-      if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current);
+      if (pendingArchiveRef.current) clearTimeout(pendingArchiveRef.current);
     };
   }, []);
 
-  const [undoToast, setUndoToast] = useState<{ message: string; undoAction: () => void } | null>(null);
-  const pendingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
+  // Archive: deferred with undo — safe because archive is reversible
   const handleArchive = async (id: string, isArchived: boolean) => {
     if (!db) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const label = modules.find(m => m.id === id)?.label ?? 'Module';
 
     if (!isArchived) {
+      // Optimistic UI update
       setModules(prev => prev.map(m => m.id === id ? { ...m, archivedAt: new Date().toISOString() } : m));
       setUndoToast({
         message: `"${label}" archived`,
-        undoAction: () => setModules(prev => prev.map(m => m.id === id ? { ...m, archivedAt: null } : m)),
+        undoAction: () => {
+          setModules(prev => prev.map(m => m.id === id ? { ...m, archivedAt: null } : m));
+          if (pendingArchiveRef.current) clearTimeout(pendingArchiveRef.current);
+        },
       });
-      if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current);
-      pendingTimerRef.current = setTimeout(async () => {
-        try { await updateModuleSpec(db, id, { archivedAt: new Date().toISOString() }); } catch (e) { console.error('Archive failed:', e); }
+      if (pendingArchiveRef.current) clearTimeout(pendingArchiveRef.current);
+      pendingArchiveRef.current = setTimeout(async () => {
+        try {
+          await updateModuleSpec(db, id, { archivedAt: new Date().toISOString() });
+        } catch (e) {
+          console.error('Archive failed:', e);
+          loadData(); // Restore on failure
+        }
       }, 3200);
     } else {
-      try { await updateModuleSpec(db, id, { archivedAt: null }); loadData(); } catch (e) { console.error('Restore failed:', e); }
+      // Restore: execute immediately
+      try {
+        await updateModuleSpec(db, id, { archivedAt: null });
+        loadData();
+      } catch (e) {
+        console.error('Restore failed:', e);
+      }
     }
   };
 
-  const handleDelete = async (id: string) => {
+  // Delete: IMMEDIATE — deferred delete was silently cancelled when navigating away
+  const handleDelete = (id: string) => {
     if (!db) return;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     const label = modules.find(m => m.id === id)?.label ?? 'Module';
-    const snapshot = modules.find(m => m.id === id);
-
-    setModules(prev => prev.filter(m => m.id !== id));
-    setUndoToast({
-      message: `"${label}" deleted`,
-      undoAction: () => { if (snapshot) setModules(prev => [...prev, snapshot]); },
-    });
-    if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current);
-    pendingTimerRef.current = setTimeout(async () => {
-      try { await deleteModuleSpec(db, id); } catch (e) { console.error('Delete failed:', e); }
-    }, 3200);
+    Alert.alert(
+      'Delete Module',
+      `Delete "${label}"? This cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+            // Optimistic removal
+            setModules(prev => prev.filter(m => m.id !== id));
+            try {
+              await deleteModuleSpec(db, id);
+            } catch (e) {
+              console.error('Delete failed:', e);
+              loadData(); // Restore list on failure
+              Alert.alert('Error', 'Could not delete this module. Please try again.');
+            }
+          },
+        },
+      ],
+    );
   };
 
-  // Filter: show folders and modules for the current nesting level
   const visibleFolders = allCollections.filter(c =>
     currentFolderId === null ? !c.parentId : c.parentId === currentFolderId,
   );
@@ -166,7 +211,7 @@ export default function ModulesScreen() {
       style={[styles.moduleRow, { backgroundColor: themeColors.surface }]}
       onPress={() => enterFolder(folder)}
     >
-      <Text style={styles.emoji}>{folder.emoji ?? '📁'}</Text>
+      <Feather name="folder" size={24} color={themeColors.accent} style={styles.icon} />
       <View style={styles.moduleInfo}>
         <Text style={[styles.moduleLabel, { color: themeColors.text }]}>{folder.name}</Text>
         <View style={styles.badges}>
@@ -197,7 +242,7 @@ export default function ModulesScreen() {
         );
       }}
     >
-      <Text style={styles.emoji}>{item.emoji ?? '📦'}</Text>
+      <Feather name={(TYPE_ICONS[item.type] ?? 'box') as any} size={24} color={themeColors.accent} style={styles.icon} />
       <View style={styles.moduleInfo}>
         <Text style={[styles.moduleLabel, { color: themeColors.text }]}>{item.label}</Text>
         <View style={styles.badges}>
@@ -211,12 +256,7 @@ export default function ModulesScreen() {
       </View>
       <Pressable
         style={styles.rowDeleteBtn}
-        onPress={() => {
-          Alert.alert('Delete Module', `Delete "${item.label}"? This cannot be undone.`, [
-            { text: 'Cancel', style: 'cancel' },
-            { text: 'Delete', style: 'destructive', onPress: () => handleDelete(item.id) },
-          ]);
-        }}
+        onPress={() => handleDelete(item.id)}
         hitSlop={8}
       >
         <Feather name="trash-2" size={16} color={themeColors.danger} />
@@ -226,7 +266,6 @@ export default function ModulesScreen() {
 
   return (
     <ScreenWrapper>
-      {/* Breadcrumb / Back navigation */}
       {folderStack.length > 1 && (
         <Pressable style={styles.backRow} onPress={goBack}>
           <Feather name="arrow-left" size={18} color={themeColors.accent} />
@@ -253,13 +292,9 @@ export default function ModulesScreen() {
         </View>
       )}
 
-      {/* Folders first */}
       {visibleFolders.map(renderFolderItem)}
-
-      {/* Then modules */}
       {visibleModules.map(renderModuleItem)}
 
-      {/* Archived (only at root) */}
       {currentFolderId === null && archived.length > 0 && (
         <>
           <SectionHeader title="Archived" subtitle={`${archived.length} modules`} />
@@ -269,7 +304,7 @@ export default function ModulesScreen() {
               style={[styles.moduleRow, styles.archivedRow, { backgroundColor: themeColors.surface }]}
               onPress={() => handleArchive(item.id, true)}
             >
-              <Text style={styles.emoji}>{item.emoji ?? '📦'}</Text>
+              <Feather name={(TYPE_ICONS[item.type] ?? 'box') as any} size={24} color={themeColors.muted} style={styles.icon} />
               <View style={styles.moduleInfo}>
                 <Text style={[styles.moduleLabel, { color: themeColors.muted }]}>{item.label}</Text>
                 <Text style={[styles.placementText, { color: themeColors.muted }]}>Tap to restore</Text>
@@ -280,7 +315,10 @@ export default function ModulesScreen() {
         </>
       )}
 
-      <Pressable style={[styles.createBtn, { backgroundColor: themeColors.accent }]} onPress={() => router.push('/modules/create')}>
+      <Pressable
+        style={[styles.createBtn, { backgroundColor: themeColors.accent }]}
+        onPress={() => router.push('/modules/create')}
+      >
         <Feather name="plus" size={20} color={themeColors.white} />
         <Text style={[styles.createBtnText, { color: themeColors.white }]}>New Module</Text>
       </Pressable>
@@ -289,11 +327,7 @@ export default function ModulesScreen() {
         <UndoToast
           message={undoToast.message}
           visible={true}
-          onUndo={() => {
-            undoToast.undoAction();
-            if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current);
-            setUndoToast(null);
-          }}
+          onUndo={() => { undoToast.undoAction(); setUndoToast(null); }}
           onDismiss={() => setUndoToast(null)}
         />
       )}
@@ -302,83 +336,26 @@ export default function ModulesScreen() {
 }
 
 const styles = StyleSheet.create({
-  backRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.xs,
-  },
-  backText: {
-    fontSize: fontSize.md,
-    fontWeight: '500',
-  },
-  moduleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: borderRadius.md,
-    padding: spacing.md,
-    marginBottom: spacing.sm,
-  },
-  rowDeleteBtn: {
-    padding: spacing.xs,
-    marginLeft: spacing.xs,
-  },
-  archivedRow: {
-    opacity: 0.6,
-  },
-  emoji: {
-    fontSize: 24,
-    marginRight: spacing.sm,
-  },
-  moduleInfo: {
-    flex: 1,
-  },
-  moduleLabel: {
-    fontSize: fontSize.md,
-    fontWeight: '600',
-  },
-  badges: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.xs,
-    marginTop: spacing.xs,
-  },
-  typeBadge: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
-    borderRadius: borderRadius.sm,
-  },
-  typeBadgeText: {
-    fontSize: fontSize.xs,
-    fontWeight: '600',
-  },
-  placementText: {
-    fontSize: fontSize.xs,
-  },
-  emptyState: {
-    alignItems: 'center',
-    paddingVertical: spacing.xxl,
-    gap: spacing.sm,
-  },
-  emptyText: {
-    fontSize: fontSize.lg,
-    fontWeight: '600',
-  },
-  emptySubtext: {
-    fontSize: fontSize.sm,
-  },
+  backRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.sm, padding: spacing.xs },
+  backText: { fontSize: fontSize.md, fontWeight: '600' },
+  moduleRow: { flexDirection: 'row', alignItems: 'center', borderRadius: borderRadius.md, padding: spacing.md, marginBottom: spacing.sm },
+  archivedRow: { opacity: 0.6 },
+  icon: { marginRight: spacing.md },
+  emoji: { fontSize: 24, marginRight: spacing.md },
+  moduleInfo: { flex: 1 },
+  moduleLabel: { fontSize: fontSize.md, fontWeight: '600', marginBottom: 4 },
+  badges: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: spacing.xs },
+  typeBadge: { paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: borderRadius.sm },
+  typeBadgeText: { fontSize: fontSize.xs, fontWeight: '600' },
+  placementText: { fontSize: fontSize.xs },
+  rowDeleteBtn: { padding: spacing.xs, marginLeft: spacing.sm },
+  emptyState: { alignItems: 'center', paddingVertical: spacing.xxl, gap: spacing.sm },
+  emptyText: { fontSize: fontSize.lg, fontWeight: '600' },
+  emptySubtext: { fontSize: fontSize.sm, textAlign: 'center', paddingHorizontal: spacing.lg },
   createBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.sm,
-    paddingVertical: spacing.md,
-    borderRadius: borderRadius.md,
-    marginTop: spacing.md,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: spacing.sm, borderRadius: borderRadius.md,
+    paddingVertical: spacing.md, marginTop: spacing.lg,
   },
-  createBtnText: {
-    fontSize: fontSize.md,
-    fontWeight: '600',
-  },
+  createBtnText: { fontSize: fontSize.md, fontWeight: '600' },
 });

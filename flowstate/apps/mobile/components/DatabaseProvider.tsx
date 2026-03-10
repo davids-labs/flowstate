@@ -335,6 +335,19 @@ export function DatabaseProvider({ children }: { children: React.ReactNode }) {
               console.warn('Migration statement failed:', e, sql);
             }
           }
+          // Apply versioned migrations (ALTER TABLE, new tables) safely.
+          // These statements may fail if already applied; failures are non-fatal.
+          const versionKeys = Object.keys(VERSION_MIGRATIONS).map((k) => Number(k)).sort((a, b) => a - b);
+          for (const ver of versionKeys) {
+            const stmts = VERSION_MIGRATIONS[ver] ?? [];
+            for (const stmt of stmts) {
+              try {
+                sqliteDb.execSync(stmt);
+              } catch (e) {
+                console.warn(`Version migration failed (ver ${ver}):`, e, stmt);
+              }
+            }
+          }
           // Record current schema version so future migrations can be applied
           try {
             sqliteDb.execSync(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);

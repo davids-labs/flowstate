@@ -35,7 +35,7 @@ export function QuickLogWidget({
         }}
       >
         <TextWidget
-          text="⚡ Quick Log"
+          text="Quick Log"
           style={{ fontSize: 13, color: '#8B8FA3' }}
         />
         <TextWidget
@@ -71,7 +71,7 @@ export function QuickLogWidget({
               }}
             >
               <TextWidget
-                text={m.emoji ?? '📦'}
+                text={'◻'}
                 style={{ fontSize: 14, marginRight: 8 }}
               />
               <TextWidget

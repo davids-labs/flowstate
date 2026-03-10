@@ -106,10 +106,10 @@ export function TimerCard({
 
   return (
     <View style={[styles.card, { backgroundColor: themeColors.surface }, compact && styles.cardCompact]}>
-      <Text style={[styles.label, { color: themeColors.textSecondary }]}>
-        {emoji ? `${emoji}  ` : ''}
-        {label}
-      </Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        <Feather name="clock" size={14} color={themeColors.textSecondary} style={styles.icon} />
+        <Text style={[styles.label, { color: themeColors.textSecondary }]}>{label}</Text>
+      </View>
 
       <Text
         style={[
@@ -234,4 +234,5 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     marginTop: spacing.xs,
   },
+  icon: { marginRight: 8 },
 });

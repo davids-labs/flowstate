@@ -58,7 +58,7 @@ export default function ModuleRemindersScreen() {
     await updateReminder(db, rem.id, { enabled });
     if (enabled && mod) {
       await scheduleModuleReminder(
-        rem.id, mod.label, mod.emoji ?? '📦', rem.time, rem.daysOfWeek, rem.message,
+        rem.id, mod.label, null, rem.time, rem.daysOfWeek, rem.message,
       );
     } else {
       await cancelModuleReminder(rem.id);
@@ -79,7 +79,7 @@ export default function ModuleRemindersScreen() {
     const rem = reminders.find(r => r.id === remId);
     if (rem?.enabled && mod) {
       await scheduleModuleReminder(
-        remId, mod.label, mod.emoji ?? '📦', time, rem.daysOfWeek, rem.message,
+        remId, mod.label, null, time, rem.daysOfWeek, rem.message,
       );
     }
     setEditingTimeId(null);
@@ -109,8 +109,8 @@ export default function ModuleRemindersScreen() {
     <ScreenWrapper>
       <ScrollView contentContainerStyle={styles.container}>
         <View style={styles.header}>
-          <Text style={styles.headerEmoji}>{mod?.emoji ?? '🔔'}</Text>
-          <Text style={[styles.headerLabel, { color: themeColors.text }]}>
+          <Feather name="bell" size={36} color={themeColors.accent} />
+          <Text style={[styles.headerLabel, { color: themeColors.text }]}> 
             {mod?.label ?? 'Module'} — Reminders
           </Text>
           <Text style={[styles.headerSub, { color: themeColors.muted }]}>

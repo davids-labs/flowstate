@@ -1,4 +1,5 @@
 import React from 'react';
+import { Feather } from '@expo/vector-icons';
 import { View, Text, StyleSheet } from 'react-native';
 import type { ModuleType, Surface } from '@flowstate/core';
 import { CountdownCard } from './CountdownCard';
@@ -200,9 +201,10 @@ export function ModuleCard({
     default:
       return (
         <View style={[styles.fallbackCard, { backgroundColor: themeColors.surface }]}>
-          <Text style={[styles.fallbackLabel, { color: themeColors.text }]}>
-            {emoji ?? '❓'} {label}
-          </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Feather name="box" size={18} color={themeColors.text} style={{ marginRight: 8 }} />
+              <Text style={[styles.fallbackLabel, { color: themeColors.text }]}>{label}</Text>
+            </View>
           <Text style={[styles.fallbackMeta, { color: themeColors.textSecondary }]}>Unknown module type: {type}</Text>
         </View>
       );
