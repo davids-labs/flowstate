@@ -35,8 +35,8 @@ export function NowBar() {
   // Ensure hooks are called in the same order on every render
   const { themeColors } = useTheme();
 
-  // Only show when timer is actively running, paused, or overdue
-  const isActive = phase === 'running' || phase === 'paused' || phase === 'overdue';
+  // Only show when timer is actively running, paused, overdue, or waiting for condition
+  const isActive = phase === 'running' || phase === 'paused' || phase === 'overdue' || phase === 'pending_condition';
   if (!isActive) return null;
 
   const isPaused = phase === 'paused';

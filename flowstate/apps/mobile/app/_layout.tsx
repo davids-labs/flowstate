@@ -5,6 +5,7 @@ import { DatabaseProvider } from "../components/DatabaseProvider";
 import { SyncProvider } from "../components/SyncProvider";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { ThemeProvider, useTheme } from "../constants/ThemeContext";
+import { UpdatesProvider } from "../components/UpdatesProvider";
 import { scheduleDailyReminders } from "../services/notifications";
 import { initializeTimerStore } from "../stores/timerStore";
 
@@ -12,17 +13,21 @@ export default function RootLayout() {
   // Schedule daily reminder notifications and restore timer state on app startup
   useEffect(() => {
     scheduleDailyReminders().catch(() => {});
-    initializeTimerStore();
+    let cleanup: (() => void) | undefined;
+    initializeTimerStore().then((fn) => { cleanup = fn; }).catch(() => {});
+    return () => { cleanup?.(); };
   }, []);
 
   return (
     <ErrorBoundary>
       <ThemeProvider>
-        <DatabaseProvider>
-          <SyncProvider>
-            <ThemedStack />
-          </SyncProvider>
-        </DatabaseProvider>
+        <UpdatesProvider>
+          <DatabaseProvider>
+            <SyncProvider>
+              <ThemedStack />
+            </SyncProvider>
+          </DatabaseProvider>
+        </UpdatesProvider>
       </ThemeProvider>
     </ErrorBoundary>
   );

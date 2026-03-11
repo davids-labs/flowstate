@@ -2,6 +2,7 @@ import React, { useState, useCallback, useMemo } from 'react';
 import { View, Text, Pressable, Image, StyleSheet, Dimensions, FlatList } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useFocusEffect } from 'expo-router';
+import * as FileSystem from 'expo-file-system/legacy';
 import { ScreenWrapper } from '../../components/layout/ScreenWrapper';
 import { SectionHeader } from '../../components/layout/SectionHeader';
 import { getSessionPhotos, getModuleSpecs } from '@flowstate/core';
@@ -38,13 +39,13 @@ export default function GalleryScreen() {
     if (!db || !isReady) return;
     try {
       const [photoResults, specs] = await Promise.all([
-        getSessionPhotos(db, selectedModuleId ?? undefined),
+        getSessionPhotos(db, selectedModuleId ?? undefined, `${FileSystem.documentDirectory}photos/`),
         getModuleSpecs(db),
       ]);
       setPhotos(photoResults);
       setModules(
         specs
-          .filter((s: any) => s.type === 'photo_log' || s.type === 'timer')
+          .filter((s: any) => s.type === 'photo_log') // BUG-09: removed 'timer' — timers have no photos
           .map((s: any) => ({ id: s.id, label: s.label, emoji: s.emoji })),
       );
     } catch (err) {

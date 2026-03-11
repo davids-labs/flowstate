@@ -75,6 +75,15 @@ export default function TabLayout() {
           ),
         }}
       />
+      <Tabs.Screen
+        name="todos"
+        options={{
+          title: "Tasks",
+          tabBarIcon: ({ color, size }) => (
+            <Feather name="check-square" size={size} color={color} />
+          ),
+        }}
+      />
     </Tabs>
     <NowBar />
     </View>

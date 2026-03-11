@@ -8,6 +8,7 @@ import {
   ScrollView,
   ActivityIndicator,
   Animated,
+  TextInput,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
@@ -21,11 +22,16 @@ import {
   getModuleSpec,
   getRoutine,
   getRoutineBlocks,
+  getRoutineBlockSets,
+  getRoutineBlocksForSet,
   getDayPlan,
   upsertDayPlan,
   createSession,
   updateSession,
   createSessionEvent,
+  getSessionBlockTodos,
+  upsertSessionBlockTodo,
+  getSessionBlockInstructions,
 } from '@flowstate/core';
 import { useTimerStore } from '../../stores/timerStore';
 
@@ -34,10 +40,27 @@ const STROKE_WIDTH = 8;
 const RADIUS = (RING_SIZE - STROKE_WIDTH) / 2;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
+// ─── Block types ────────────────────────────────────────────────
+
+interface TodoItem {
+  id: string;
+  text: string;
+}
+
+interface BlockCondition {
+  type: 'module_checked' | 'count_reached' | 'min_time' | 'manual_only' | 'all_todos_checked';
+  value?: number; // used for count_reached / min_time
+}
+
 interface Block {
   name: string;
   durationMinutes: number;
   type: string;
+  blockMode: 'timed' | 'goal_based' | 'countup';
+  goalTarget: number | null;
+  todos: TodoItem[];
+  condition: BlockCondition | null;
+  liftTag: string;
 }
 
 function formatTime(ms: number): string {
@@ -78,11 +101,29 @@ export default function RoutineLauncherScreen() {
   const [moduleLabel, setModuleLabel] = useState('');
   const [moduleEmoji, setModuleEmoji] = useState('');
   const [routineName, setRoutineName] = useState('');
+  const [routineMode, setRoutineMode] = useState<'sequential' | 'countup_list'>('sequential');
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [totalMinutes, setTotalMinutes] = useState(0);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [started, setStarted] = useState(false);
   const [autoStart, setAutoStart] = useState(false);
+
+  // Feature 4: per-block todo checked state { [blockIndex]: { [todoId]: boolean } }
+  const [todoChecked, setTodoChecked] = useState<Record<number, Record<string, boolean>>>({});
+  // Feature 5: per-block instructions { [blockIndex]: string }
+  const [blockInstructions, setBlockInstructions] = useState<Record<number, string>>({});
+  // Feature 2: count-up timer for goal-based / countup blocks
+  const [countupMs, setCountupMs] = useState(0);
+  const countupRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const countupStartRef = useRef<number>(0);
+  // Feature 2: goal count progress
+  const [goalCount, setGoalCount] = useState(0);
+  // V2: Feature 3 - Variable Block Sets
+  const [blockSets, setBlockSets] = useState<Array<{ id: string; name: string; isDefault: number }>>([]);
+  const [selectedSetId, setSelectedSetId] = useState<string | null>(null);
+  const [setPickerVisible, setSetPickerVisible] = useState(false);
+  // Store routineId so set-picker can re-query blocks
+  const [launcherRoutineId, setLauncherRoutineId] = useState<string | null>(null);
 
   // Pulse animation for active block
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -147,15 +188,40 @@ export default function RoutineLauncherScreen() {
         }
         setRoutineName(routine.name);
         setTotalMinutes(routine.totalDurationMinutes);
+        setRoutineMode((routine as any).mode ?? 'sequential');
+        setLauncherRoutineId(routineId);
 
         const blks = await getRoutineBlocks(db, routineId);
-        setBlocks(
-          blks.map((b: any) => ({
-            name: b.name,
-            durationMinutes: b.durationMinutes,
-            type: b.type ?? 'focus',
-          })),
-        );
+        const parsedBlocks = blks.map((b: any) => {
+            let todos: TodoItem[] = [];
+            try { todos = JSON.parse(b.todos ?? '[]'); } catch {}
+            let condition: BlockCondition | null = null;
+            try { condition = b.condition ? JSON.parse(b.condition) : null; } catch {}
+            return {
+              name: b.name,
+              durationMinutes: b.durationMinutes,
+              type: b.type ?? 'focus',
+              blockMode: (b.blockMode ?? 'timed') as Block['blockMode'],
+              goalTarget: b.goalTarget ? Number(b.goalTarget) : null,
+              todos,
+              condition,
+              liftTag: b.liftTag ?? '',
+            };
+          });
+
+        // V2: Feature 3 - load block sets; show picker if multiple sets exist
+        const sets = await getRoutineBlockSets(db, routineId);
+        setBlockSets(sets as any);
+        if (sets.length > 1) {
+          // Show set picker; pre-select default if any
+          const defaultSet = (sets as any[]).find((s: any) => s.isDefault);
+          setSelectedSetId(defaultSet?.id ?? null);
+          setBlocks(parsedBlocks); // store full block list first
+          setSetPickerVisible(true);
+        } else {
+          // No sets or single set — use all blocks directly
+          setBlocks(parsedBlocks);
+        }
       } catch (e) {
         console.error('Failed to load routine launcher:', e);
       } finally {
@@ -163,6 +229,42 @@ export default function RoutineLauncherScreen() {
       }
     })();
   }, [db, isReady, id]);
+
+  // Feature 6: Redirect to count-up session screen for countup_list routines
+  useEffect(() => {
+    if (!loading && routineMode === 'countup_list' && id) {
+      router.replace(`/countup-session/${id}`);
+    }
+  }, [loading, routineMode, id]);
+
+  // V2: Feature 3 - confirm set selection and filter blocks
+  const handleSelectSet = useCallback(async (setId: string | null) => {
+    if (!db || !launcherRoutineId) return;
+    try {
+      const blks = await getRoutineBlocksForSet(db, launcherRoutineId, setId);
+      const parsed = (blks as any[]).map((b: any) => {
+        let todos: TodoItem[] = [];
+        try { todos = JSON.parse(b.todos ?? '[]'); } catch {}
+        let condition: BlockCondition | null = null;
+        try { condition = b.condition ? JSON.parse(b.condition) : null; } catch {}
+        return {
+          name: b.name,
+          durationMinutes: b.durationMinutes,
+          type: b.type ?? 'focus',
+          blockMode: (b.blockMode ?? 'timed') as Block['blockMode'],
+          goalTarget: b.goalTarget ? Number(b.goalTarget) : null,
+          todos,
+          condition,
+          liftTag: b.liftTag ?? '',
+        };
+      });
+      setBlocks(parsed);
+      setSelectedSetId(setId);
+      setSetPickerVisible(false);
+    } catch (e) {
+      console.error('Failed to filter blocks for set:', e);
+    }
+  }, [db, launcherRoutineId]);
 
   // Start the routine
   const handleStart = useCallback(async () => {
@@ -194,12 +296,33 @@ export default function RoutineLauncherScreen() {
       });
       setSessionId(sid);
 
+      // Feature 4: Load any existing todo checked state
+      const initialChecked: Record<number, Record<string, boolean>> = {};
+      for (let i = 0; i < blocks.length; i++) {
+        const rows = await getSessionBlockTodos(db, sid, i);
+        if (rows.length > 0) {
+          initialChecked[i] = {};
+          for (const row of rows) {
+            initialChecked[i][row.todoId] = row.checked;
+          }
+        }
+      }
+      setTodoChecked(initialChecked);
+
+      // Feature 5: Load block instructions
+      const instrs: Record<number, string> = {};
+      for (let i = 0; i < blocks.length; i++) {
+        const txt = await getSessionBlockInstructions(db, sid, i);
+        if (txt) instrs[i] = txt;
+      }
+      setBlockInstructions(instrs);
+
       // Mark session as in-progress
       await updateSession(db, sid, {
         status: 'in_progress',
         startedAt: new Date().toISOString(),
       });
-      await createSessionEvent(db, { sessionId: sid, type: 'timer_started' });
+      await createSessionEvent(db, { sessionId: sid, type: 'started' });
 
       // Init and start the timer
       init(sid, blocks, routineName);
@@ -210,6 +333,115 @@ export default function RoutineLauncherScreen() {
       Alert.alert('Error', 'Could not start the routine. Please try again.');
     }
   }, [db, id, blocks, routineName, init, play]);
+
+  // ─── Feature 2: Count-up timer management ───────────────────────
+  // Start/stop the JS-interval count-up for goal_based / countup blocks
+  const startCountup = useCallback(() => {
+    countupStartRef.current = Date.now() - countupMs;
+    countupRef.current = setInterval(() => {
+      setCountupMs(Date.now() - countupStartRef.current);
+    }, 1000);
+  }, [countupMs]);
+
+  const stopCountup = useCallback(() => {
+    if (countupRef.current) {
+      clearInterval(countupRef.current);
+      countupRef.current = null;
+    }
+  }, []);
+
+  // Reset count-up state when block changes
+  const prevBlockIndex = useRef(blockIndex);
+  useEffect(() => {
+    if (blockIndex !== prevBlockIndex.current) {
+      prevBlockIndex.current = blockIndex;
+      stopCountup();
+      setCountupMs(0);
+      setGoalCount(0);
+    }
+  }, [blockIndex, stopCountup]);
+
+  // Cleanup interval on unmount
+  useEffect(() => () => { stopCountup(); }, [stopCountup]);
+
+  // ─── Feature 1: canAdvance logic ──────────────────────────────
+  const canAdvance = useCallback(() => {
+    const cb = blocks[blockIndex];
+    if (!cb) return true;
+    const cond = cb.condition;
+    if (!cond) return true;
+    switch (cond.type) {
+      case 'min_time': {
+        const minMs = (cond.value ?? 0) * 60 * 1000;
+        // For countup blocks use countupMs; for timed blocks use elapsed (duration - remaining)
+        const elapsed = cb.blockMode !== 'timed' ? countupMs : ((cb.durationMinutes * 60 * 1000) - remaining);
+        return elapsed >= minMs;
+      }
+      case 'count_reached': {
+        return goalCount >= (cond.value ?? 1);
+      }
+      case 'all_todos_checked': {
+        if (cb.todos.length === 0) return true;
+        const checked = todoChecked[blockIndex] ?? {};
+        return cb.todos.every((t) => checked[t.id]);
+      }
+      case 'manual_only':
+        return false; // User must long-press confirm
+      default:
+        return true;
+    }
+  }, [blocks, blockIndex, todoChecked, goalCount, countupMs, remaining]);
+
+  const conditionReason = useCallback((): string => {
+    const cb = blocks[blockIndex];
+    if (!cb?.condition) return '';
+    switch (cb.condition.type) {
+      case 'min_time': return `Min ${cb.condition.value ?? 0} min required`;
+      case 'count_reached': return `Reach ${cb.condition.value ?? 1} (current: ${goalCount})`;
+      case 'all_todos_checked': return 'Complete all todos first';
+      case 'manual_only': return 'Manual confirmation required';
+      default: return '';
+    }
+  }, [blocks, blockIndex, goalCount]);
+
+  // Feature 4: toggle todo checked
+  const handleToggleTodo = useCallback(async (todoId: string) => {
+    if (!sessionId || !db) return;
+    const current = todoChecked[blockIndex]?.[todoId] ?? false;
+    const next = !current;
+    setTodoChecked((prev) => {
+      const block = { ...(prev[blockIndex] ?? {}), [todoId]: next };
+      return { ...prev, [blockIndex]: block };
+    });
+    try {
+      await upsertSessionBlockTodo(db, sessionId, blockIndex, todoId, next);
+    } catch (e) { console.warn('upsertSessionBlockTodo failed:', e); }
+  }, [db, sessionId, blockIndex, todoChecked]);
+
+  // Feature 2: log goal count
+  const handleLogGoalCount = useCallback(async (increment: number) => {
+    const cb = blocks[blockIndex];
+    if (!cb) return;
+    const next = goalCount + increment;
+    setGoalCount(next);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (db && sessionId) {
+      createSessionEvent(db, {
+        sessionId,
+        type: 'block_started', // reuse closest event type; real type would need schema ext
+        blockIndex,
+      }).catch(() => {});
+    }
+    // Auto-complete when goal reached
+    if (cb.blockMode === 'goal_based' && cb.goalTarget && next >= cb.goalTarget) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      if (blockIndex < blocks.length - 1) {
+        skip();
+      } else {
+        handleEndRef.current();
+      }
+    }
+  }, [goalCount, blockIndex, blocks, db, sessionId, skip]);
 
   const handlePlayPause = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -223,6 +455,12 @@ export default function RoutineLauncherScreen() {
   }, [phase, pause, resume, play, started]);
 
   const handleSkip = useCallback(() => {
+    // Feature 1: Block condition gate
+    if (!canAdvance()) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      Alert.alert('Cannot Advance', conditionReason());
+      return;
+    }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     skip();
     if (db && sessionId) {
@@ -232,7 +470,7 @@ export default function RoutineLauncherScreen() {
         blockIndex,
       }).catch((e) => { console.warn('operation failed:', e); });
     }
-  }, [skip, db, sessionId, blockIndex]);
+  }, [skip, db, sessionId, blockIndex, canAdvance, conditionReason]);
 
   const handleEnd = useCallback(async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -244,7 +482,7 @@ export default function RoutineLauncherScreen() {
           status: 'completed',
           endedAt: new Date().toISOString(),
         });
-        await createSessionEvent(db, { sessionId, type: 'session_completed' });
+        await createSessionEvent(db, { sessionId, type: 'ended' });
       } catch (e) { console.warn('operation failed:', e); }
     }
 
@@ -285,11 +523,31 @@ export default function RoutineLauncherScreen() {
     }
   }, [phase, started]);
 
+  // BUG-13: Auto-complete session when last block's timer expires (enters 'overdue').
+  // The engine transitions running→overdue but never auto-calls end() without user input.
+  // When the last block is overdue, schedule handleEnd with a 400ms delay so the user
+  // can see the final state before the debrief transition.
+  const autoEndScheduled = useRef(false);
+  useEffect(() => {
+    if (phase === 'overdue' && started && blockIndex >= blocks.length - 1 && !autoEndScheduled.current) {
+      autoEndScheduled.current = true;
+      const timer = setTimeout(() => {
+        handleEndRef.current();
+      }, 400);
+      return () => clearTimeout(timer);
+    }
+    if (phase !== 'overdue') {
+      autoEndScheduled.current = false;
+    }
+  }, [phase, started, blockIndex, blocks.length]);
+
   const timerProgress = Math.min(progress, 1);
   const strokeDashoffset = CIRCUMFERENCE * (1 - timerProgress);
   const ringColor = isOverdue ? themeColors.danger : (TYPE_COLORS[blocks[blockIndex]?.type] ?? themeColors.accent);
   const isPaused = phase === 'paused';
   const isRunning = phase === 'running' || phase === 'overdue';
+  // Feature 1: compute canAdvance for current render
+  const advanceOk = canAdvance();
 
   if (loading) {
     return (
@@ -300,7 +558,69 @@ export default function RoutineLauncherScreen() {
     );
   }
 
-  if (blocks.length === 0) {
+  // V2: Feature 3 - Block Set picker (shown when routine has multiple sets)
+  if (setPickerVisible) {
+    return (
+      <View style={[styles.container, { backgroundColor: themeColors.background }]}>
+        <Text style={[styles.routineTitle, { color: themeColors.text }]}>Choose a Set</Text>
+        <Text style={[styles.routineSubtitle, { color: themeColors.muted }]}>
+          {routineName} has multiple block sets. Select which one to run today.
+        </Text>
+        <ScrollView style={{ width: '100%', marginTop: spacing.lg }} contentContainerStyle={{ gap: spacing.sm, paddingHorizontal: spacing.lg }}>
+          {/* "All blocks" option */}
+          <Pressable
+            style={[
+              styles.setPickerCard,
+              { backgroundColor: themeColors.surface, borderColor: selectedSetId === null ? themeColors.accent : themeColors.border },
+              selectedSetId === null && { borderWidth: 2 },
+            ]}
+            onPress={() => setSelectedSetId(null)}
+          >
+            <Feather name="layers" size={20} color={selectedSetId === null ? themeColors.accent : themeColors.muted} />
+            <View style={{ flex: 1, marginLeft: spacing.sm }}>
+              <Text style={[styles.setPickerName, { color: themeColors.text }]}>All Blocks</Text>
+              <Text style={[styles.setPickerDesc, { color: themeColors.muted }]}>Run the complete routine without filtering</Text>
+            </View>
+            {selectedSetId === null && <Feather name="check-circle" size={20} color={themeColors.accent} />}
+          </Pressable>
+          {blockSets.map((set) => (
+            <Pressable
+              key={set.id}
+              style={[
+                styles.setPickerCard,
+                { backgroundColor: themeColors.surface, borderColor: selectedSetId === set.id ? themeColors.accent : themeColors.border },
+                selectedSetId === set.id && { borderWidth: 2 },
+              ]}
+              onPress={() => setSelectedSetId(set.id)}
+            >
+              <Feather name="bookmark" size={20} color={selectedSetId === set.id ? themeColors.accent : themeColors.muted} />
+              <View style={{ flex: 1, marginLeft: spacing.sm }}>
+                <Text style={[styles.setPickerName, { color: themeColors.text }]}>
+                  {set.name}{set.isDefault ? '  ★ Default' : ''}
+                </Text>
+              </View>
+              {selectedSetId === set.id && <Feather name="check-circle" size={20} color={themeColors.accent} />}
+            </Pressable>
+          ))}
+        </ScrollView>
+        <Pressable
+          style={[styles.startBtn, { backgroundColor: themeColors.accent, marginTop: spacing.xl }]}
+          onPress={() => handleSelectSet(selectedSetId)}
+        >
+          <Feather name="play" size={20} color="#fff" />
+          <Text style={[styles.startBtnText, { color: '#fff' }]}>Continue with this set</Text>
+        </Pressable>
+        <Pressable
+          style={[styles.backBtn, { backgroundColor: themeColors.surface, marginTop: spacing.sm }]}
+          onPress={() => router.canGoBack() ? router.back() : router.replace('/(tabs)')}
+        >
+          <Text style={[styles.backBtnText, { color: themeColors.muted }]}>Cancel</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  if (blocks.length === 0 && !setPickerVisible) {
     return (
       <View style={[styles.container, { backgroundColor: themeColors.background }]}>
         <Feather name="alert-circle" size={48} color={themeColors.danger} />
@@ -320,7 +640,9 @@ export default function RoutineLauncherScreen() {
         <ScrollView contentContainerStyle={styles.preStartContent} showsVerticalScrollIndicator={false}>
           <Text style={styles.preStartEmoji}>{moduleEmoji || '🚀'}</Text>
           <Text style={[styles.routineTitle, { color: themeColors.text }]}>{moduleLabel || routineName}</Text>
-          <Text style={[styles.routineSubtitle, { color: themeColors.muted }]}>{totalMinutes} min · {blocks.length} blocks</Text>
+          <Text style={[styles.routineSubtitle, { color: themeColors.muted }]}>
+            {routineMode === 'countup_list' ? 'Count-Up List' : `${totalMinutes} min`} · {blocks.length} blocks
+          </Text>
 
           <View style={styles.blockList}>
             {blocks.map((b, i) => (
@@ -332,7 +654,9 @@ export default function RoutineLauncherScreen() {
                 </View>
                 <View style={styles.blockCardInfo}>
                   <Text style={[styles.blockCardName, { color: themeColors.text }]}>{b.name}</Text>
-                  <Text style={[styles.blockCardDur, { color: themeColors.muted }]}>{b.durationMinutes} min</Text>
+                  <Text style={[styles.blockCardDur, { color: themeColors.muted }]}>
+                    {b.blockMode === 'goal_based' ? `Goal: ${b.goalTarget ?? '?'}` : b.blockMode === 'countup' ? 'Open-ended' : `${b.durationMinutes} min`}
+                  </Text>
                 </View>
                 <View style={[styles.blockIndex, { backgroundColor: themeColors.surfaceBorder }]}>
                   <Text style={[styles.blockIndexText, { color: themeColors.muted }]}>{i + 1}</Text>
@@ -352,39 +676,60 @@ export default function RoutineLauncherScreen() {
 
   // ─── Active timer view ───
   const currentBlock = blocks[blockIndex];
+  const isGoalBased = currentBlock?.blockMode === 'goal_based';
+  const isCountup = currentBlock?.blockMode === 'countup' || routineMode === 'countup_list';
+  const blockTodos = currentBlock?.todos ?? [];
+  const blockChecked = todoChecked[blockIndex] ?? {};
+  const instructions = blockInstructions[blockIndex] ?? '';
 
   return (
-    <View style={[styles.container, { backgroundColor: themeColors.background }]}>
+    <ScrollView
+      style={{ flex: 1, backgroundColor: themeColors.background }}
+      contentContainerStyle={[styles.container, { paddingVertical: spacing.xl }]}
+      showsVerticalScrollIndicator={false}
+    >
       <Text style={[styles.routineTitle, { color: themeColors.text }]}>{routineName}</Text>
 
-      {/* Timer ring */}
+      {/* Timer ring — show count-up for goal/countup modes */}
       <Animated.View style={[styles.ringContainer, { transform: [{ scale: pulseAnim }] }]}>
-        <Svg width={RING_SIZE} height={RING_SIZE}>
-          <Circle
-            cx={RING_SIZE / 2}
-            cy={RING_SIZE / 2}
-            r={RADIUS}
-            stroke={themeColors.surfaceBorder}
-            strokeWidth={STROKE_WIDTH}
-            fill="none"
-          />
-          <Circle
-            cx={RING_SIZE / 2}
-            cy={RING_SIZE / 2}
-            r={RADIUS}
-            stroke={ringColor}
-            strokeWidth={STROKE_WIDTH}
-            fill="none"
-            strokeDasharray={CIRCUMFERENCE}
-            strokeDashoffset={strokeDashoffset}
-            strokeLinecap="round"
-            transform={`rotate(-90 ${RING_SIZE / 2} ${RING_SIZE / 2})`}
-          />
-        </Svg>
+        {isGoalBased || isCountup ? (
+          // Count-up display (no progress ring fill)
+          <Svg width={RING_SIZE} height={RING_SIZE}>
+            <Circle cx={RING_SIZE / 2} cy={RING_SIZE / 2} r={RADIUS}
+              stroke={themeColors.surfaceBorder} strokeWidth={STROKE_WIDTH} fill="none" />
+            <Circle cx={RING_SIZE / 2} cy={RING_SIZE / 2} r={RADIUS}
+              stroke={ringColor} strokeWidth={STROKE_WIDTH} fill="none"
+              strokeDasharray={CIRCUMFERENCE}
+              strokeDashoffset={isGoalBased && currentBlock.goalTarget
+                ? CIRCUMFERENCE * (1 - Math.min(goalCount / currentBlock.goalTarget, 1))
+                : 0}
+              strokeLinecap="round"
+              transform={`rotate(-90 ${RING_SIZE / 2} ${RING_SIZE / 2})`} />
+          </Svg>
+        ) : (
+          <Svg width={RING_SIZE} height={RING_SIZE}>
+            <Circle cx={RING_SIZE / 2} cy={RING_SIZE / 2} r={RADIUS}
+              stroke={themeColors.surfaceBorder} strokeWidth={STROKE_WIDTH} fill="none" />
+            <Circle cx={RING_SIZE / 2} cy={RING_SIZE / 2} r={RADIUS}
+              stroke={ringColor} strokeWidth={STROKE_WIDTH} fill="none"
+              strokeDasharray={CIRCUMFERENCE} strokeDashoffset={strokeDashoffset}
+              strokeLinecap="round"
+              transform={`rotate(-90 ${RING_SIZE / 2} ${RING_SIZE / 2})`} />
+          </Svg>
+        )}
         <View style={styles.timeOverlay}>
-          <Text style={[styles.timeText, { color: themeColors.text }, isOverdue && { color: themeColors.danger }]}>
-            {formatTime(remaining)}
-          </Text>
+          {isCountup ? (
+            <Text style={[styles.timeText, { color: ringColor }]}>{formatTime(countupMs)}</Text>
+          ) : isGoalBased ? (
+            <>
+              <Text style={[styles.goalCountText, { color: ringColor }]}>{goalCount}</Text>
+              <Text style={[styles.goalTargetText, { color: themeColors.muted }]}>/ {currentBlock.goalTarget ?? '?'}</Text>
+            </>
+          ) : (
+            <Text style={[styles.timeText, { color: themeColors.text }, isOverdue && { color: themeColors.danger }]}>
+              {formatTime(remaining)}
+            </Text>
+          )}
         </View>
       </Animated.View>
 
@@ -396,6 +741,13 @@ export default function RoutineLauncherScreen() {
       </View>
       <Text style={[styles.blockNameLarge, { color: themeColors.text }]}>{currentBlockName || currentBlock?.name || 'Ready'}</Text>
       <Text style={[styles.blockMeta, { color: themeColors.muted }]}>Block {blockIndex + 1} of {totalBlocks || blocks.length}</Text>
+
+      {/* Feature 5: Per-block instructions subtitle */}
+      {!!instructions && (
+        <Text style={[styles.instructionText, { color: themeColors.muted }]} numberOfLines={2}>
+          {instructions}
+        </Text>
+      )}
 
       {/* Block chips */}
       <View style={styles.chipRow}>
@@ -413,6 +765,68 @@ export default function RoutineLauncherScreen() {
         ))}
       </View>
 
+      {/* Feature 2: Goal-based counter buttons */}
+      {isGoalBased && (
+        <View style={[styles.goalRow, { backgroundColor: themeColors.surface }]}>
+          <Pressable
+            style={[styles.goalBtn, { backgroundColor: themeColors.surfaceBorder }]}
+            onPress={() => setGoalCount((n) => Math.max(0, n - 1))}
+          >
+            <Feather name="minus" size={20} color={themeColors.text} />
+          </Pressable>
+          <View style={styles.goalCenter}>
+            <Text style={[styles.goalBtnLabel, { color: themeColors.muted }]}>Reps / Count</Text>
+            <Text style={[styles.goalCountLarge, { color: themeColors.text }]}>{goalCount}</Text>
+          </View>
+          <Pressable
+            style={[styles.goalBtn, { backgroundColor: ringColor }]}
+            onPress={() => handleLogGoalCount(1)}
+          >
+            <Feather name="plus" size={20} color={themeColors.white} />
+          </Pressable>
+        </View>
+      )}
+
+      {/* Feature 4: Block Todos checklist */}
+      {blockTodos.length > 0 && (
+        <View style={[styles.todosCard, { backgroundColor: themeColors.surface }]}>
+          <Text style={[styles.todosSectionTitle, { color: themeColors.muted }]}>CHECKLIST</Text>
+          {blockTodos.map((todo) => {
+            const checked = blockChecked[todo.id] ?? false;
+            return (
+              <Pressable
+                key={todo.id}
+                style={styles.todoLaunchRow}
+                onPress={() => handleToggleTodo(todo.id)}
+              >
+                <View style={[
+                  styles.todoCheckbox,
+                  { borderColor: themeColors.surfaceBorder },
+                  checked && { backgroundColor: themeColors.success, borderColor: themeColors.success },
+                ]}>
+                  {checked && <Feather name="check" size={12} color={themeColors.white} />}
+                </View>
+                <Text style={[
+                  styles.todoLaunchText,
+                  { color: themeColors.text },
+                  checked && { color: themeColors.muted, textDecorationLine: 'line-through' },
+                ]}>
+                  {todo.text}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      )}
+
+      {/* Feature 1: Condition lock indicator */}
+      {!advanceOk && (
+        <View style={[styles.conditionBanner, { backgroundColor: themeColors.warning + '20' }]}>
+          <Feather name="lock" size={14} color={themeColors.warning} />
+          <Text style={[styles.conditionText, { color: themeColors.warning }]}>{conditionReason()}</Text>
+        </View>
+      )}
+
       {/* Controls */}
       <View style={styles.controls}>
         <Pressable style={[styles.controlBtn, { backgroundColor: themeColors.surface }]} onPress={handleAbandon}>
@@ -428,17 +842,24 @@ export default function RoutineLauncherScreen() {
         </Pressable>
 
         <Pressable
-          style={[styles.controlBtn, { backgroundColor: themeColors.surface }]}
+          style={[
+            styles.controlBtn,
+            { backgroundColor: advanceOk ? themeColors.surface : themeColors.surfaceBorder },
+          ]}
           onPress={blockIndex < blocks.length - 1 ? handleSkip : handleEnd}
         >
-          <Feather
-            name={blockIndex < blocks.length - 1 ? 'skip-forward' : 'check'}
-            size={24}
-            color={themeColors.accent}
-          />
+          {advanceOk ? (
+            <Feather
+              name={blockIndex < blocks.length - 1 ? 'skip-forward' : 'check'}
+              size={24}
+              color={themeColors.accent}
+            />
+          ) : (
+            <Feather name="lock" size={24} color={themeColors.muted} />
+          )}
         </Pressable>
       </View>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -602,6 +1023,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.xl,
+    marginTop: spacing.lg,
   },
   controlBtn: {
     width: 52,
@@ -616,5 +1038,113 @@ const styles = StyleSheet.create({
     borderRadius: 36,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+
+  // ─── V2 Feature styles ───
+  instructionText: {
+    fontSize: fontSize.sm,
+    textAlign: 'center',
+    marginTop: spacing.xs,
+    marginBottom: spacing.xs,
+    paddingHorizontal: spacing.lg,
+  },
+  goalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: borderRadius.lg,
+    padding: spacing.md,
+    gap: spacing.md,
+    marginTop: spacing.md,
+    width: '100%',
+  },
+  goalBtn: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  goalCenter: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  goalBtnLabel: {
+    fontSize: fontSize.xs,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  goalCountLarge: {
+    fontSize: 40,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+  },
+  goalCountText: {
+    fontSize: 48,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+  },
+  goalTargetText: {
+    fontSize: fontSize.md,
+    fontWeight: '500',
+  },
+  todosCard: {
+    borderRadius: borderRadius.lg,
+    padding: spacing.md,
+    marginTop: spacing.md,
+    width: '100%',
+    gap: spacing.xs,
+  },
+  todosSectionTitle: {
+    fontSize: fontSize.xs,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+    marginBottom: 4,
+  },
+  todoLaunchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingVertical: 6,
+  },
+  todoCheckbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  todoLaunchText: {
+    flex: 1,
+    fontSize: fontSize.md,
+  },
+  conditionBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    borderRadius: borderRadius.md,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.md,
+    marginTop: spacing.sm,
+  },
+  conditionText: {
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+  },
+  // V2: Feature 3 - Set picker
+  setPickerCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+    borderWidth: 1,
+  },
+  setPickerName: {
+    fontSize: fontSize.md,
+    fontWeight: '600',
+  },
+  setPickerDesc: {
+    fontSize: fontSize.sm,
+    marginTop: 2,
   },
 });

@@ -10,9 +10,12 @@ import {
   moduleSpecs, moduleValues, sessions, eventLog,
   homescreenLayout, collections, moduleGoals,
   moduleSchedules, moduleReminders,
+  tasks, taskTags, taggedTimeLogs, sessionTags,
+  sessionBlockTodos, sessionBlockInstructions,
+  routineBlockSets, courses, courseComponents, csvPlans,
 } from './schema';
 
-const ALL_TABLES = [
+export const ALL_TABLES = [
   { name: 'collections', table: collections },
   { name: 'routines', table: routines },
   { name: 'routine_blocks', table: routineBlocks },
@@ -26,6 +29,17 @@ const ALL_TABLES = [
   { name: 'module_goals', table: moduleGoals },
   { name: 'module_schedules', table: moduleSchedules },
   { name: 'module_reminders', table: moduleReminders },
+  // V2 tables (schema v9)
+  { name: 'tasks', table: tasks },
+  { name: 'task_tags', table: taskTags },
+  { name: 'tagged_time_logs', table: taggedTimeLogs },
+  { name: 'session_tags', table: sessionTags },
+  { name: 'session_block_todos', table: sessionBlockTodos },
+  { name: 'session_block_instructions', table: sessionBlockInstructions },
+  { name: 'routine_block_sets', table: routineBlockSets },
+  { name: 'courses', table: courses },
+  { name: 'course_components', table: courseComponents },
+  { name: 'csv_plans', table: csvPlans },
 ];
 
 export interface BackupData {
@@ -61,7 +75,7 @@ export async function exportBackup(db: any): Promise<BackupData> {
   }
 
   return {
-    version: 7,
+    version: 9,
     exportedAt: new Date().toISOString(),
     tables,
     photoUris: [...new Set(photoUris)],

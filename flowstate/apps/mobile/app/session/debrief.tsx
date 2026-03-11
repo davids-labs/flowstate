@@ -102,7 +102,7 @@ export default function DebriefScreen() {
       ? new Date(data.endedAt).getTime() - new Date(data.startedAt).getTime()
       : 0;
   const activeDurationMs = totalDurationMs - (data?.totalPausedMs ?? 0);
-  const pauseCount = data?.events.filter((e) => e.type === "timer_paused").length ?? 0;
+  const pauseCount = data?.events.filter((e) => e.type === 'paused').length ?? 0;
   const skipCount = data?.events.filter((e) => e.type === "block_skipped").length ?? 0;
 
   function formatDuration(ms: number): string {

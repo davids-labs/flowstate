@@ -1,15 +1,15 @@
 {
   "name": "@flowstate/core",
   "version": "1.0.0",
-  "description": "",
+  "description": "Shared business logic, schema, and types for FlowState",
   "main": "src/index.ts",
+  "types": "src/index.ts",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
   "dependencies": {
     "drizzle-orm": "^0.45.1",
     "firebase": "^12.9.0",

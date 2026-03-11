@@ -8,7 +8,9 @@ export type SessionEventType =
   | 'block_skipped'
   | 'ended'
   | 'abandoned'
-  | 'module_logged';
+  | 'module_logged'
+  | 'session_opened'   // fired when session detail screen is opened
+  | 'session_undone';  // fired when a completed session is undone
 
 export interface SessionEvent {
   id: string;

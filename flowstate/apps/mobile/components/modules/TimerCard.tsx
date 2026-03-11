@@ -34,14 +34,25 @@ export function TimerCard({
   onFinish,
 }: TimerCardProps) {
   const { themeColors } = useTheme();
+
+  // ─── BUG-04 fix: use timestamps, not a counter ───────────────
+  // startedAtMs: wall-clock ms when timer was first started (or last resumed)
+  // pausedDurationMs: accumulated ms spent paused
+  // pausedAtMs: wall-clock ms when the current pause began (null if not paused)
+  const startedAtMs = useRef<number | null>(null);
+  const pausedDurationMs = useRef<number>(0);
+  const pausedAtMs = useRef<number | null>(null);
+
   const [isRunning, setIsRunning] = useState(false);
-  const [remaining, setRemaining] = useState(defaultDurationSeconds);
-  const [elapsed, setElapsed] = useState(0);
+  const [isFinished, setIsFinished] = useState(false);
+  // Display state: updated by interval tick, computed from timestamps
+  const [displayRemaining, setDisplayRemaining] = useState(defaultDurationSeconds);
+  const [displayElapsed, setDisplayElapsed] = useState(0);
+
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const startTimeRef = useRef<number | null>(null);
 
   const progress = defaultDurationSeconds > 0
-    ? 1 - (remaining / defaultDurationSeconds)
+    ? 1 - (displayRemaining / defaultDurationSeconds)
     : 0;
 
   const cleanup = useCallback(() => {
@@ -55,54 +66,80 @@ export function TimerCard({
     return cleanup;
   }, [cleanup]);
 
-  useEffect(() => {
-    if (remaining <= 0 && isRunning) {
-      // Timer finished
-      cleanup();
-      setIsRunning(false);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-
-      const durationMs = elapsed * 1000;
-      onFinish?.(moduleId, durationMs);
+  // Compute remaining/elapsed from absolute timestamps — immune to interval drift
+  const computeValues = useCallback((): { remaining: number; elapsedSeconds: number } => {
+    if (!startedAtMs.current) {
+      return { remaining: defaultDurationSeconds, elapsedSeconds: 0 };
     }
-  }, [remaining, isRunning, elapsed, moduleId, onFinish, cleanup]);
+    const now = pausedAtMs.current ?? Date.now();
+    const totalElapsedMs = now - startedAtMs.current - pausedDurationMs.current;
+    const elapsedSeconds = Math.max(0, Math.floor(totalElapsedMs / 1000));
+    const remaining = Math.max(0, defaultDurationSeconds - elapsedSeconds);
+    return { remaining, elapsedSeconds };
+  }, [defaultDurationSeconds]);
+
+  const startTicking = useCallback(() => {
+    cleanup();
+    intervalRef.current = setInterval(() => {
+      const { remaining, elapsedSeconds } = computeValues();
+      setDisplayRemaining(remaining);
+      setDisplayElapsed(elapsedSeconds);
+      if (remaining <= 0) {
+        cleanup();
+        setIsRunning(false);
+        setIsFinished(true);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        onFinish?.(moduleId, elapsedSeconds * 1000);
+      }
+    }, 1000);
+  }, [cleanup, computeValues, moduleId, onFinish]);
 
   const handleToggle = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     if (isRunning) {
-      // Stop
+      // Pause — record when pause started
       cleanup();
+      pausedAtMs.current = Date.now();
       setIsRunning(false);
     } else {
-      // Start / Resume
-      if (remaining <= 0) {
-        // Reset first
-        setRemaining(defaultDurationSeconds);
-        setElapsed(0);
+      if (isFinished || displayRemaining <= 0) {
+        // Restart from zero
+        startedAtMs.current = Date.now();
+        pausedDurationMs.current = 0;
+        pausedAtMs.current = null;
+        setDisplayRemaining(defaultDurationSeconds);
+        setDisplayElapsed(0);
+        setIsFinished(false);
+      } else if (pausedAtMs.current !== null) {
+        // Resume from pause — add pause duration to accumulator
+        pausedDurationMs.current += Date.now() - pausedAtMs.current;
+        pausedAtMs.current = null;
+      } else {
+        // First start
+        startedAtMs.current = Date.now();
+        pausedDurationMs.current = 0;
       }
-      startTimeRef.current = Date.now();
       setIsRunning(true);
-
-      intervalRef.current = setInterval(() => {
-        setRemaining(prev => {
-          const next = prev - 1;
-          return Math.max(0, next);
-        });
-        setElapsed(prev => prev + 1);
-      }, 1000);
+      startTicking();
     }
   };
 
   const handleReset = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     cleanup();
+    startedAtMs.current = null;
+    pausedDurationMs.current = 0;
+    pausedAtMs.current = null;
     setIsRunning(false);
-    setRemaining(defaultDurationSeconds);
-    setElapsed(0);
+    setIsFinished(false);
+    setDisplayRemaining(defaultDurationSeconds);
+    setDisplayElapsed(0);
   };
 
-  const finished = remaining <= 0 && !isRunning && elapsed > 0;
+  const finished = isFinished;
+  const remaining = displayRemaining;
+  const elapsed = displayElapsed;
 
   return (
     <View style={[styles.card, { backgroundColor: themeColors.surface }, compact && styles.cardCompact]}>

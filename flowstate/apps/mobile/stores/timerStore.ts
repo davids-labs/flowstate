@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { TimerEngine } from '@flowstate/core';
-import type { TimerPhase, TimerState } from '@flowstate/core';
+import type { TimerPhase, TimerState, BlockMode } from '@flowstate/core';
 import {
   startBackgroundTimer,
   stopBackgroundTimer,
@@ -28,7 +28,7 @@ async function loadTimerState() {
   }
 }
 
-export async function initializeTimerStore() {
+export async function initializeTimerStore(): Promise<() => void> {
   const persisted = await loadTimerState();
   if (persisted && persisted.sessionId && persisted.blocks && persisted.startedAt) {
     useTimerStore.getState().restore(
@@ -44,13 +44,15 @@ export async function initializeTimerStore() {
   }
 
   let lastAppState = AppState.currentState;
-  AppState.addEventListener('change', async (nextAppState) => {
+  const subscription = AppState.addEventListener('change', async (nextAppState) => {
     const timerState = useTimerStore.getState();
     if (lastAppState.match(/active|foreground/) && nextAppState.match(/inactive|background/)) {
       if (timerState.phase === 'running' || timerState.phase === 'overdue') {
-        // Compute remaining from stable store values — NO dynamic import
-        const remaining = timerState.blockDurationMs - timerState.elapsed;
-        await startBackgroundTimer(remaining, timerState.currentBlockName, timerState.routineName);
+        // BUG-15: Only send countdown notification for timed blocks
+        if (timerState.blockMode === 'timed') {
+          const remaining = timerState.blockDurationMs - timerState.elapsed;
+          await startBackgroundTimer(remaining, timerState.currentBlockName, timerState.routineName);
+        }
       }
     }
     if (lastAppState.match(/inactive|background/) && nextAppState.match(/active|foreground/)) {
@@ -61,11 +63,15 @@ export async function initializeTimerStore() {
     }
     lastAppState = nextAppState;
   });
+
+  // Return cleanup so callers can remove the listener (prevents duplicate subscriptions on hot reload)
+  return () => subscription.remove();
 }
 
 interface TimerBlock {
   name: string;
   durationMinutes: number;
+  mode?: BlockMode;
 }
 
 type TimerStoreState = TimerState & {
@@ -138,6 +144,7 @@ export const useTimerStore = create<TimerStoreState>((set) => {
     totalBlocks: 0,
     elapsed: 0,
     sessionId: null,
+    blockMode: 'timed' as BlockMode,
     blocks: [],
     currentBlockName: '',
     routineName: '',
@@ -150,6 +157,7 @@ export const useTimerStore = create<TimerStoreState>((set) => {
 
     init: (sessionId: string, blocks: TimerBlock[], routineName?: string) => {
       engine.init({ sessionId, blocks });
+      const firstMode: BlockMode = blocks[0]?.mode ?? (blocks[0]?.durationMinutes === 0 ? 'countup' : 'timed');
       set((state) => ({
         ...state,
         sessionId,
@@ -163,6 +171,7 @@ export const useTimerStore = create<TimerStoreState>((set) => {
         blockDurationMs: blocks[0]?.durationMinutes
           ? blocks[0].durationMinutes * 60 * 1000
           : 0,
+        blockMode: firstMode,
         phase: 'idle' as TimerPhase,
         elapsed: 0,
         currentBlockName: blocks[0]?.name || '',
@@ -182,6 +191,19 @@ export const useTimerStore = create<TimerStoreState>((set) => {
         startedAt: opts.startedAt,
         totalPausedMs: opts.totalPausedMs,
       });
+      // BUG-10: Compute actual phase from timestamps rather than blindly setting 'paused'.
+      // If the block should have already expired based on wall-clock time, restore as 'overdue'.
+      const block = blocks[opts.blockIndex];
+      const blockDurationMs = block?.durationMinutes ? block.durationMinutes * 60 * 1000 : 0;
+      const blockMode: BlockMode = block?.mode ?? (block?.durationMinutes === 0 ? 'countup' : 'timed');
+      const elapsedMs = Date.now() - opts.startedAt - opts.totalPausedMs;
+      // Countup / goal_based blocks never go overdue
+      const restoredPhase: TimerPhase = (blockMode !== 'timed')
+        ? 'paused'
+        : (elapsedMs >= blockDurationMs ? 'overdue' : 'paused');
+      // When overdue, transition the engine from 'paused' to 'running' so that engine.tick()
+      // will correctly emit 'overdue' on the next interval tick.
+      if (restoredPhase === 'overdue') engine.resume();
       // Compute elapsed from the restored engine so the display is
       // immediately correct without waiting for the first tick.
       set((state) => ({
@@ -194,10 +216,11 @@ export const useTimerStore = create<TimerStoreState>((set) => {
         startedAt: opts.startedAt,
         totalPausedMs: opts.totalPausedMs,
         pausedAt: null,
-        phase: 'paused' as TimerPhase,
+        phase: restoredPhase,  // BUG-10: computed from timestamps, not hardcoded 'paused'
         blockDurationMs: blocks[opts.blockIndex]?.durationMinutes
           ? blocks[opts.blockIndex].durationMinutes * 60 * 1000
           : 0,
+        blockMode,
         elapsed: engine.elapsed,
         currentBlockName: blocks[opts.blockIndex]?.name || '',
       }));
@@ -219,11 +242,15 @@ export const useTimerStore = create<TimerStoreState>((set) => {
       });
       startTicking(set);
       const state = useTimerStore.getState();
-      await startBackgroundTimer(
-        engine.remaining,
-        state.currentBlockName || '',
-        state.sessionId || ''
-      );
+      // BUG-15: Only send countdown notification for timed blocks.
+      // Countup / goal_based blocks have no end time.
+      if (state.blockMode === 'timed' && engine.remaining > 0) {
+        await startBackgroundTimer(
+          engine.remaining,
+          state.currentBlockName || '',
+          state.routineName || '',
+        );
+      }
     },
 
     pause: async () => {
@@ -257,11 +284,14 @@ export const useTimerStore = create<TimerStoreState>((set) => {
       });
       startTicking(set);
       const state = useTimerStore.getState();
-      await startBackgroundTimer(
-        engine.remaining,
-        state.currentBlockName || '',
-        state.sessionId || ''
-      );
+      // BUG-15: Only send countdown notification for timed blocks
+      if (state.blockMode === 'timed' && engine.remaining > 0) {
+        await startBackgroundTimer(
+          engine.remaining,
+          state.currentBlockName || '',
+          state.routineName || '',
+        );
+      }
     },
 
     skip: async () => {
@@ -272,12 +302,15 @@ export const useTimerStore = create<TimerStoreState>((set) => {
           stopTicking();
           newState = { ...state, phase: 'completed' as TimerPhase };
         } else {
+          const nextBlock = state.blocks[nextIndex];
+          const nextMode: BlockMode = nextBlock?.mode ?? (nextBlock?.durationMinutes === 0 ? 'countup' : 'timed');
           newState = {
             ...state,
             blockIndex: nextIndex,
             blockDurationMs: state.blocks[nextIndex]?.durationMinutes
               ? state.blocks[nextIndex].durationMinutes * 60 * 1000
               : 0,
+            blockMode: nextMode,
             phase: 'idle' as TimerPhase,
             startedAt: null,
             pausedAt: null,

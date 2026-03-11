@@ -1,6 +1,11 @@
 // ─── Timer Phase ────────────────────────────────────────────────
 
-export type TimerPhase = 'idle' | 'running' | 'paused' | 'overdue' | 'completed';
+export type TimerPhase = 'idle' | 'running' | 'paused' | 'overdue' | 'completed' | 'pending_condition';
+
+// ─── Block Mode ─────────────────────────────────────────────────
+
+/** How a block's timer behaves. */
+export type BlockMode = 'timed' | 'countup' | 'goal_based';
 
 // ─── Timer State ────────────────────────────────────────────────
 
@@ -12,7 +17,7 @@ export interface TimerState {
   pausedAt: number | null;
   /** Accumulated paused time in ms */
   totalPausedMs: number;
-  /** Duration of the current block in ms */
+  /** Duration of the current block in ms (0 for countup / open-ended) */
   blockDurationMs: number;
   /** Current block index */
   blockIndex: number;
@@ -20,6 +25,8 @@ export interface TimerState {
   totalBlocks: number;
   /** Session ID this timer belongs to */
   sessionId: string | null;
+  /** How this block runs: timed countdown, open-ended countup, or goal-based */
+  blockMode: BlockMode;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────
@@ -44,5 +51,6 @@ export function createInitialTimerState(): TimerState {
     blockIndex: 0,
     totalBlocks: 0,
     sessionId: null,
+    blockMode: 'timed',
   };
 }
