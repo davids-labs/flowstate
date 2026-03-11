@@ -23,6 +23,10 @@ export const routines = sqliteTable('routines', {
   createdAt: text('created_at').notNull().default(''),
   updatedAt: text('updated_at').notNull().default(''),
   archivedAt: text('archived_at'),
+  // V2: Life Pillar Architecture (Part 4)
+  mode: text('mode').default('sequential'),     // 'sequential' | 'countup_list'
+  pillar: text('pillar').default('general'),    // 'gym' | 'academic' | 'life' | 'general'
+  category: text('category'),                   // free-text within pillar (e.g. 'Chest Day')
 });
 
 // ─── Routine Blocks ─────────────────────────────────────────────
@@ -35,6 +39,17 @@ export const routineBlocks = sqliteTable('routine_blocks', {
   type: text('type').notNull().default('focus'), // focus | break | warmup | cooldown | custom
   order: integer('order').notNull().default(0),
   moduleIds: text('module_ids'), // JSON array of module IDs
+  // V2: Feature 1 - Block Conditions
+  condition: text('condition'),                // JSON-serialised BlockCondition | null
+  // V2: Feature 2 - Goal-Based Blocks
+  blockMode: text('block_mode').default('timed'),  // 'timed' | 'goal_based' | 'countup'
+  goalTarget: integer('goal_target'),          // target count for goal_based mode
+  // V2: Feature 4 - Session To-Do List
+  todos: text('todos').default('[]'),          // JSON array of {id, text}
+  // V2: Feature 9 - Volume & PR Dashboards
+  liftTag: text('lift_tag'),                   // primary lift name for gym sessions
+  // V2: Feature 3 - Variable Block Sets
+  blockSetId: text('block_set_id'),            // FK → routine_block_sets.id; null = applies to all sets
 });
 
 // ─── Plans ──────────────────────────────────────────────────────
@@ -65,6 +80,8 @@ export const dayPlans = sqliteTable('day_plans', {
   notes: text('notes'),
   createdAt: text('created_at').notNull().default(''),
   updatedAt: text('updated_at').notNull().default(''),
+  // V2: CSV Manager (Part 7)
+  csvPlanId: text('csv_plan_id'), // FK → csvPlans.id (nullable, null = manual)
 });
 
 // ─── Module Specs ───────────────────────────────────────────────
@@ -84,6 +101,11 @@ export const moduleSpecs = sqliteTable('module_specs', {
   archivedAt: text('archived_at'),
   createdAt: text('created_at').notNull().default(''),
   updatedAt: text('updated_at').notNull().default(''),
+  // V2: Life Pillar Architecture
+  pillar: text('pillar').default('general'),           // 'gym' | 'academic' | 'life' | 'general'
+  // V2: Feature 8 - Simple Streaks with Notifications
+  streakEnabled: integer('streak_enabled').default(0),
+  streakCheckInTime: text('streak_check_in_time'),     // 'HH:MM' for daily warning notification
 });
 
 // ─── Module Values (logged data) ────────────────────────────────
@@ -101,8 +123,8 @@ export const moduleValues = sqliteTable('module_values', {
 
 export const sessions = sqliteTable('sessions', {
   id: text('id').primaryKey(),
-  dayPlanId: text('day_plan_id').notNull().references(() => dayPlans.id),
-  routineId: text('routine_id').notNull().references(() => routines.id),
+  dayPlanId: text('day_plan_id').references(() => dayPlans.id), // nullable for ad-hoc sessions
+  routineId: text('routine_id').references(() => routines.id), // nullable for ad-hoc timer sessions (BUG-12)
   routineName: text('routine_name').notNull(),
   moduleId: text('module_id'), // optional FK → moduleSpecs.id (for timer-module sessions)
   status: text('status').notNull().default('pending'), // pending | in_progress | completed | abandoned
@@ -116,6 +138,10 @@ export const sessions = sqliteTable('sessions', {
   notes: text('notes'),                             // free-text session debrief notes
   createdAt: text('created_at').notNull().default(''),
   updatedAt: text('updated_at').notNull().default(''),
+  // V2: Life Pillar Architecture (Part 4)
+  pillar: text('pillar').default('general'),    // inherited from routine, stored for denormalised queries
+  // V2: CSV Manager (Part 7)
+  csvPlanId: text('csv_plan_id'),               // FK → csvPlans.id (nullable, null = manual/non-CSV)
 });
 
 // ─── Event Log ──────────────────────────────────────────────────
@@ -138,6 +164,7 @@ export const homescreenLayout = sqliteTable('homescreen_layout', {
   order: integer('order').notNull().default(0),
   width: integer('width').notNull().default(1), // 1 = half-width, 2 = full-width
 });
+
 // ─── Module Goals (Linear Path Tracking) ────────────────────────
 
 export const moduleGoals = sqliteTable('module_goals', {
@@ -175,4 +202,110 @@ export const moduleReminders = sqliteTable('module_reminders', {
   enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
   createdAt: text('created_at').notNull().default(''),
   updatedAt: text('updated_at').notNull().default(''),
+});
+
+// ═══════════════════════════════════════════════════════════════
+// V2 NEW TABLES — added in schema version 9
+// ═══════════════════════════════════════════════════════════════
+
+// ─── Tasks (Feature 12 - Robust To-Do List) ─────────────────────
+
+export const tasks = sqliteTable('tasks', {
+  id: text('id').primaryKey(),
+  title: text('title').notNull(),
+  pillar: text('pillar').default('general'), // 'gym' | 'academic' | 'life' | 'general'
+  category: text('category'),
+  dueDate: text('due_date'),                 // YYYY-MM-DD, nullable = no due date
+  dueTime: text('due_time'),                 // HH:MM, nullable
+  priority: integer('priority').default(2), // 1=high 2=medium 3=low
+  completed: integer('completed').notNull().default(0),
+  recurrence: text('recurrence'),           // JSON | null: { type: 'daily'|'weekly', days?: number[] }
+  notes: text('notes'),
+  createdAt: text('created_at').notNull().default(''),
+});
+
+export const taskTags = sqliteTable('task_tags', {
+  id: text('id').primaryKey(),
+  taskId: text('task_id').notNull().references(() => tasks.id),
+  tag: text('tag').notNull(),
+});
+
+// ─── Tagged Time Logs (Feature 14 - Tag-Based Count-Up Timer) ───
+
+export const taggedTimeLogs = sqliteTable('tagged_time_logs', {
+  id: text('id').primaryKey(),
+  tag: text('tag').notNull(),
+  pillar: text('pillar').default('general'),
+  startedAt: text('started_at').notNull(),
+  endedAt: text('ended_at'),
+  durationSeconds: integer('duration_seconds').default(0),
+  notes: text('notes'),
+});
+
+// ─── Session Tags (Part 4.1 - Tag System) ───────────────────────
+
+export const sessionTags = sqliteTable('session_tags', {
+  id: text('id').primaryKey(),
+  sessionId: text('session_id').notNull().references(() => sessions.id),
+  tag: text('tag').notNull(),
+  loggedAt: text('logged_at').notNull(),
+});
+
+// ─── Session Block To-Dos (Feature 4) ───────────────────────────
+
+export const sessionBlockTodos = sqliteTable('session_block_todos', {
+  id: text('id').primaryKey(),
+  sessionId: text('session_id').notNull().references(() => sessions.id),
+  blockIndex: integer('block_index').notNull(),
+  todoId: text('todo_id').notNull(),           // matches routineBlocks.todos item id
+  checked: integer('checked').notNull().default(0),
+});
+
+// ─── Session Block Instructions (Feature 5 - Session Planner) ───
+
+export const sessionBlockInstructions = sqliteTable('session_block_instructions', {
+  id: text('id').primaryKey(),
+  sessionId: text('session_id').notNull().references(() => sessions.id),
+  blockIndex: integer('block_index').notNull(),
+  instructions: text('instructions').notNull().default(''),
+  updatedAt: text('updated_at').notNull().default(''),
+});
+
+// ─── Routine Block Sets (Feature 3 - Variable Block Sets) ───────
+
+export const routineBlockSets = sqliteTable('routine_block_sets', {
+  id: text('id').primaryKey(),
+  routineId: text('routine_id').notNull().references(() => routines.id),
+  name: text('name').notNull(),
+  isDefault: integer('is_default').notNull().default(0),
+});
+
+// ─── Courses (Feature 11 - Weighted Grade Tracking) ─────────────
+
+export const courses = sqliteTable('courses', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  pillar: text('pillar').default('academic'),
+  targetGrade: real('target_grade'),           // 0–100
+  createdAt: text('created_at').notNull().default(''),
+  updatedAt: text('updated_at').notNull().default(''),
+});
+
+export const courseComponents = sqliteTable('course_components', {
+  id: text('id').primaryKey(),
+  courseId: text('course_id').notNull().references(() => courses.id),
+  name: text('name').notNull(),                // e.g. 'Final Exam'
+  weight: real('weight').notNull(),            // 0–100 (percentage weight)
+  receivedGrade: real('received_grade'),       // nullable until graded
+});
+
+// ─── CSV Plans (Part 7 - CSV Manager Overhaul) ──────────────────
+
+export const csvPlans = sqliteTable('csv_plans', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  description: text('description'),
+  uploadedAt: text('uploaded_at').notNull(),
+  isActive: integer('is_active').notNull().default(1),
+  fileHash: text('file_hash'),                 // SHA-256 of the source CSV for dedup detection
 });

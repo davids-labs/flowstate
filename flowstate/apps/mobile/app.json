@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "FlowState",
+    "name": "flowstate",
     "slug": "flowstate",
     "version": "1.0.0",
     "scheme": "flowstate",
@@ -12,14 +12,7 @@
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
-    "runtimeVersion": {
-      "policy": "appVersion"
-    },
-    "updates": {
-      "url": "https://u.expo.dev/2f1700bd-3462-4b56-ab43-1169966df4fa"
-    },
     "plugins": [
-      "expo-updates",
       "expo-router",
       "expo-sqlite",
       "expo-notifications",
@@ -76,7 +69,8 @@
       "@react-native-google-signin/google-signin"
     ],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.davidslabs.flowstate"
     },
     "android": {
       "googleServicesFile": "./google-services.json",
@@ -92,7 +86,7 @@
         "android.permission.WRITE_EXTERNAL_STORAGE",
         "android.permission.INTERNET"
       ],
-      "package": "com.anonymous.flowstate"
+      "package": "com.davidslabs.flowstate"
     },
     "web": {
       "favicon": "./assets/favicon.png",

@@ -316,6 +316,89 @@ export async function pushSession(
   await pushToFirestore('sessions', sessionId, data);
 }
 
+// ─── V2 Table Sync ──────────────────────────────────────────────
+// Push helpers for all V2 tables so data survives device changes.
+
+/** Push a task to Firestore. */
+export async function pushTask(
+  taskId: string,
+  data: Record<string, unknown>,
+): Promise<void> {
+  await pushToFirestore('tasks', taskId, data);
+}
+
+/** Push a task tag to Firestore. */
+export async function pushTaskTag(
+  id: string,
+  data: Record<string, unknown>,
+): Promise<void> {
+  await pushToFirestore('taskTags', id, data);
+}
+
+/** Push a tagged time log entry to Firestore. */
+export async function pushTaggedTimeLog(
+  id: string,
+  data: Record<string, unknown>,
+): Promise<void> {
+  await pushToFirestore('taggedTimeLogs', id, data);
+}
+
+/** Push a session tag to Firestore. */
+export async function pushSessionTag(
+  id: string,
+  data: Record<string, unknown>,
+): Promise<void> {
+  await pushToFirestore('sessionTags', id, data);
+}
+
+/** Push a session block todo to Firestore. */
+export async function pushSessionBlockTodo(
+  id: string,
+  data: Record<string, unknown>,
+): Promise<void> {
+  await pushToFirestore('sessionBlockTodos', id, data);
+}
+
+/** Push session block instructions to Firestore. */
+export async function pushSessionBlockInstruction(
+  id: string,
+  data: Record<string, unknown>,
+): Promise<void> {
+  await pushToFirestore('sessionBlockInstructions', id, data);
+}
+
+/** Push a routine block set to Firestore. */
+export async function pushRoutineBlockSet(
+  id: string,
+  data: Record<string, unknown>,
+): Promise<void> {
+  await pushToFirestore('routineBlockSets', id, data);
+}
+
+/** Push a course to Firestore. */
+export async function pushCourse(
+  courseId: string,
+  data: Record<string, unknown>,
+): Promise<void> {
+  await pushToFirestore('courses', courseId, data);
+}
+
+/** Push a course component to Firestore. */
+export async function pushCourseComponent(
+  id: string,
+  data: Record<string, unknown>,
+): Promise<void> {
+  await pushToFirestore('courseComponents', id, data);
+}
+
+/** Push a CSV plan to Firestore. */
+export async function pushCsvPlan(
+  id: string,
+  data: Record<string, unknown>,
+): Promise<void> {
+  await pushToFirestore('csvPlans', id, data);
+}
+
 // ─── Sync Manager ───────────────────────────────────────────────
 
 /**
@@ -328,6 +411,13 @@ export class SyncManager {
   private _onRemoteModuleValue?: (date: string, moduleId: string, value: string) => void;
   private _onRemoteDayPlan?: (date: string, data: DocumentData) => void;
   private _onRemoteTimerState?: (state: SyncedTimerState) => void;
+  // V2 remote handlers
+  private _onRemoteTask?: (id: string, data: DocumentData) => void;
+  private _onRemoteSession?: (id: string, data: DocumentData) => void;
+  private _onRemoteCourse?: (id: string, data: DocumentData) => void;
+  private _onRemoteCourseComponent?: (id: string, data: DocumentData) => void;
+  private _onRemoteCsvPlan?: (id: string, data: DocumentData) => void;
+  private _onRemoteTaggedTimeLog?: (id: string, data: DocumentData) => void;
 
   /**
    * Register callbacks for remote data.
@@ -336,10 +426,22 @@ export class SyncManager {
     onModuleValue?: (date: string, moduleId: string, value: string) => void;
     onDayPlan?: (date: string, data: DocumentData) => void;
     onTimerState?: (state: SyncedTimerState) => void;
+    onTask?: (id: string, data: DocumentData) => void;
+    onSession?: (id: string, data: DocumentData) => void;
+    onCourse?: (id: string, data: DocumentData) => void;
+    onCourseComponent?: (id: string, data: DocumentData) => void;
+    onCsvPlan?: (id: string, data: DocumentData) => void;
+    onTaggedTimeLog?: (id: string, data: DocumentData) => void;
   }) {
     this._onRemoteModuleValue = handlers.onModuleValue;
     this._onRemoteDayPlan = handlers.onDayPlan;
     this._onRemoteTimerState = handlers.onTimerState;
+    this._onRemoteTask = handlers.onTask;
+    this._onRemoteSession = handlers.onSession;
+    this._onRemoteCourse = handlers.onCourse;
+    this._onRemoteCourseComponent = handlers.onCourseComponent;
+    this._onRemoteCsvPlan = handlers.onCsvPlan;
+    this._onRemoteTaggedTimeLog = handlers.onTaggedTimeLog;
   }
 
   /**
@@ -378,6 +480,27 @@ export class SyncManager {
     if (this._onRemoteTimerState) {
       this._unsubscribers.push(listenTimerState(this._onRemoteTimerState));
     }
+
+    // ─── V2 table listeners ───────────────────────────────────
+    // Generic helper to wire collection listeners for V2 tables.
+    const addCollectionListener = (
+      collectionName: string,
+      cb?: (id: string, data: DocumentData) => void,
+    ) => {
+      if (!cb) return;
+      this._unsubscribers.push(
+        listenCollection(collectionName, (docs) => {
+          for (const { id, data } of docs) cb(id, data);
+        }),
+      );
+    };
+
+    addCollectionListener('tasks', this._onRemoteTask);
+    addCollectionListener('sessions', this._onRemoteSession);
+    addCollectionListener('courses', this._onRemoteCourse);
+    addCollectionListener('courseComponents', this._onRemoteCourseComponent);
+    addCollectionListener('csvPlans', this._onRemoteCsvPlan);
+    addCollectionListener('taggedTimeLogs', this._onRemoteTaggedTimeLog);
 
     // Periodically flush offline queue (every 30s)
     this._flushInterval = setInterval(() => {

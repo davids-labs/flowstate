@@ -16,6 +16,7 @@ import { ModuleCard } from "../../components/modules/ModuleCard";
 import { TallyCard } from "../../components/modules/TallyCard";
 import { PhotoLogCard } from "../../components/modules/PhotoLogCard";
 import { HourlyTimeline } from "../../components/shared/HourlyTimeline";
+import { MassEditSheet } from "../../components/sessions/MassEditSheet";
 import { useDatabaseSafe } from "../../components/DatabaseProvider";
 import { useDayStore } from "../../stores/dayStore";
 import { useSyncContext } from "../../components/SyncProvider";
@@ -57,6 +58,28 @@ export default function TodayScreen() {
 
   // Module picker state
   const [showModulePicker, setShowModulePicker] = useState(false);
+
+  // Multi-select for mass edit (Feature 13)
+  const [selectedSessionIds, setSelectedSessionIds] = useState<string[]>([]);
+  const [showMassEdit, setShowMassEdit] = useState(false);
+  const isSelecting = selectedSessionIds.length > 0;
+
+  const handleSessionLongPress = (sessionId: string) => {
+    if (selectedSessionIds.includes(sessionId)) return;
+    setSelectedSessionIds(prev => [...prev, sessionId]);
+  };
+
+  const handleSessionTap = (sessionId: string) => {
+    if (isSelecting) {
+      setSelectedSessionIds(prev =>
+        prev.includes(sessionId) ? prev.filter(id => id !== sessionId) : [...prev, sessionId]
+      );
+    } else {
+      router.push(`/session/${sessionId}`);
+    }
+  };
+
+  const clearSelection = () => setSelectedSessionIds([]);
 
   const todayStr = new Date().toISOString().slice(0, 10);
 
@@ -458,38 +481,47 @@ export default function TodayScreen() {
 
           {sessions.length > 0 ? (
             sessions.map((s: any) => (
-              <View key={s.id} style={styles.sessionRow}>
-                <Pressable style={{ flex: 1 }} onPress={() => router.push(`/session/${s.id}`)}>
+              <View key={s.id} style={[styles.sessionRow, selectedSessionIds.includes(s.id) && { backgroundColor: themeColors.accentLight, borderRadius: borderRadius.md }]}>
+                <Pressable
+                  style={{ flex: 1 }}
+                  onPress={() => handleSessionTap(s.id)}
+                  onLongPress={() => handleSessionLongPress(s.id)}
+                >
                   <SessionCard
                     sessionId={s.id}
                     routineName={s.routineName}
+                    routineId={s.routineId ?? undefined}
                     durationMinutes={s.durationMinutes ?? 0}
                     blockCount={s.blockCount ?? 0}
                     status={s.status}
                   />
                 </Pressable>
-                <Pressable
-                  style={styles.sessionCompleteBtn}
-                  onPress={async () => {
-                    if (!db) return;
-                    try {
-                      await updateSession(db, s.id, { status: 'completed', endedAt: new Date().toISOString() });
-                      await loadSessions();
-                    } catch (e) {
-                      console.error('Failed to quick-complete session:', e);
-                    }
-                  }}
-                  hitSlop={8}
-                >
-                  <Feather name="check" size={16} color={themeColors.success} />
-                </Pressable>
-                <Pressable
-                  style={styles.sessionDeleteBtn}
-                  onPress={() => handleDeleteSession(s.id)}
-                  hitSlop={8}
-                >
-                  <Feather name="trash-2" size={16} color={themeColors.danger} />
-                </Pressable>
+                {!isSelecting && (
+                  <>
+                    <Pressable
+                      style={styles.sessionCompleteBtn}
+                      onPress={async () => {
+                        if (!db) return;
+                        try {
+                          await updateSession(db, s.id, { status: 'completed', endedAt: new Date().toISOString() });
+                          await loadSessions();
+                        } catch (e) {
+                          console.error('Failed to quick-complete session:', e);
+                        }
+                      }}
+                      hitSlop={8}
+                    >
+                      <Feather name="check" size={16} color={themeColors.success} />
+                    </Pressable>
+                    <Pressable
+                      style={styles.sessionDeleteBtn}
+                      onPress={() => handleDeleteSession(s.id)}
+                      hitSlop={8}
+                    >
+                      <Feather name="trash-2" size={16} color={themeColors.danger} />
+                    </Pressable>
+                  </>
+                )}
               </View>
             ))
           ) : (
@@ -614,6 +646,33 @@ export default function TodayScreen() {
           </Pressable>
         </View>
       </Modal>
+
+      {/* Feature 13: Multi-select floating action bar */}
+      {isSelecting && (
+        <View style={[styles.massEditBar, { backgroundColor: themeColors.surface, borderTopColor: themeColors.border }]}>
+          <Pressable onPress={clearSelection} style={styles.massEditBarBtn}>
+            <Feather name="x" size={18} color={themeColors.muted} />
+            <Text style={[styles.massEditBarText, { color: themeColors.muted }]}>Cancel</Text>
+          </Pressable>
+          <Text style={[styles.massEditBarCount, { color: themeColors.accent }]}>{selectedSessionIds.length} selected</Text>
+          <Pressable onPress={() => setShowMassEdit(true)} style={styles.massEditBarBtn}>
+            <Feather name="edit-3" size={18} color={themeColors.accent} />
+            <Text style={[styles.massEditBarText, { color: themeColors.accent }]}>Edit</Text>
+          </Pressable>
+        </View>
+      )}
+
+      {/* Feature 13: Mass Edit Sheet */}
+      <MassEditSheet
+        visible={showMassEdit}
+        selectedIds={selectedSessionIds}
+        onClose={() => setShowMassEdit(false)}
+        onDone={() => {
+          setShowMassEdit(false);
+          clearSelection();
+          loadSessions();
+        }}
+      />
     </ScreenWrapper>
   );
 }
@@ -902,5 +961,31 @@ const styles = StyleSheet.create({
   modalConfirmText: {
     fontSize: fontSize.md,
     fontWeight: "600",
+  },
+  massEditBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderTopWidth: 1,
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+  },
+  massEditBarBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    padding: spacing.sm,
+  },
+  massEditBarText: {
+    fontSize: fontSize.sm,
+    fontWeight: "600",
+  },
+  massEditBarCount: {
+    fontSize: fontSize.md,
+    fontWeight: "700",
   },
 });

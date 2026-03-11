@@ -15,6 +15,8 @@ import { MandatorySessionCard } from './MandatorySessionCard';
 import { TallyCard } from './TallyCard';
 import { PhotoLogCard } from './PhotoLogCard';
 import { RoutineLauncherCard } from './RoutineLauncherCard';
+import { ReminderCard } from './ReminderCard';
+import type { ReminderConfig } from '@flowstate/core';
 import { fontSize, spacing, borderRadius } from '../../constants/theme';
 import { useTheme } from '../../constants/ThemeContext';
 
@@ -195,6 +197,17 @@ export function ModuleCard({
           accentColor={config.accentColor as string}
           compact={isCompact}
           value={value}
+        />
+      );
+
+    case 'reminder':
+      return (
+        <ReminderCard
+          id={id}
+          label={label}
+          emoji={emoji}
+          config={config as unknown as ReminderConfig}
+          onPress={onValueChange ? () => onValueChange(null) : undefined}
         />
       );
 

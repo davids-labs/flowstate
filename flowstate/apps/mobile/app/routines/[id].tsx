@@ -9,6 +9,7 @@ import { useDatabaseSafe } from '../../components/DatabaseProvider';
 import {
   getRoutine, getRoutineBlocks, updateRoutine, createRoutineBlock,
   updateRoutineBlock, deleteRoutineBlock,
+  getRoutineBlockSets, createRoutineBlockSet, updateRoutineBlockSet, deleteRoutineBlockSet,
 } from '@flowstate/core';
 import { fontSize, spacing, borderRadius } from '../../constants/theme';
 import { useTheme } from '../../constants/ThemeContext';
@@ -16,12 +17,26 @@ import { useTheme } from '../../constants/ThemeContext';
 const BLOCK_TYPES = ['focus', 'break', 'warmup', 'cooldown', 'custom'] as const;
 type BlockType = (typeof BLOCK_TYPES)[number];
 
+interface BlockTodoItem {
+  id: string;
+  text: string;
+}
+
 interface BlockDraft {
   key: string;
   dbId?: string; // existing DB id, undefined for new blocks
   name: string;
   durationMinutes: number;
   type: BlockType;
+  // V2: Feature 4 - Session To-Do List
+  todos: BlockTodoItem[];
+  // V2: Feature 2 - Goal-Based Blocks
+  blockMode: 'timed' | 'goal_based' | 'countup';
+  goalTarget: string; // string for TextInput, convert to number on save
+  // V2: Feature 1 - Lift tag for gym stats
+  liftTag: string;
+  // V2: Feature 3 - Variable Block Sets
+  blockSetId: string | null; // null = appears in all sets
 }
 
 const TYPE_ICONS: Record<BlockType, string> = {
@@ -55,6 +70,16 @@ export default function EditRoutineScreen() {
   const [saving, setSaving] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [originalBlockIds, setOriginalBlockIds] = useState<string[]>([]);
+  // V2: Feature 6 - Routine mode
+  const [routineMode, setRoutineMode] = useState<'sequential' | 'countup_list'>('sequential');
+  const [routinePillar, setRoutinePillar] = useState('general');
+  // Expanded block state for todo editor
+  const [expandedBlockKey, setExpandedBlockKey] = useState<string | null>(null);
+  const [newTodoText, setNewTodoText] = useState('');
+  // V2: Feature 3 - Variable Block Sets
+  const [blockSets, setBlockSets] = useState<Array<{ id: string; name: string; isDefault: number }>>([]);
+  const [activeSetId, setActiveSetId] = useState<string | null>(null); // null = "All"
+  const [newSetName, setNewSetName] = useState('');
 
   // ─── Load existing routine ────────────────────────────────────
   const loadRoutine = useCallback(async () => {
@@ -68,6 +93,8 @@ export default function EditRoutineScreen() {
       }
       setName(routine.name);
       setDescription(routine.description || '');
+      setRoutineMode((routine as any).mode ?? 'sequential');
+      setRoutinePillar((routine as any).pillar ?? 'general');
 
       const existingBlocks = await getRoutineBlocks(db, id);
       const drafts: BlockDraft[] = existingBlocks.map((b: any) => ({
@@ -76,9 +103,17 @@ export default function EditRoutineScreen() {
         name: b.name,
         durationMinutes: b.durationMinutes,
         type: b.type as BlockType,
+        todos: (() => { try { return JSON.parse(b.todos ?? '[]'); } catch { return []; } })(),
+        blockMode: b.blockMode ?? 'timed',
+        goalTarget: b.goalTarget != null ? String(b.goalTarget) : '',
+        liftTag: b.liftTag ?? '',
+        blockSetId: b.blockSetId ?? null,
       }));
       setBlocks(drafts);
       setOriginalBlockIds(existingBlocks.map((b: any) => b.id));
+
+      const sets = await getRoutineBlockSets(db, id);
+      setBlockSets(sets as any);
       setLoaded(true);
     } catch (e) {
       console.error('Failed to load routine:', e);
@@ -91,7 +126,17 @@ export default function EditRoutineScreen() {
   const addBlock = (type: BlockType = 'focus') => {
     setBlocks((prev) => [
       ...prev,
-      { key: nextKey(), name: type === 'break' ? 'Break' : `Block ${prev.length + 1}`, durationMinutes: type === 'break' ? 5 : 25, type },
+      {
+        key: nextKey(),
+        name: type === 'break' ? 'Break' : `Block ${prev.length + 1}`,
+        durationMinutes: type === 'break' ? 5 : 25,
+        type,
+        todos: [],
+        blockMode: 'timed',
+        goalTarget: '',
+        liftTag: '',
+        blockSetId: activeSetId, // assign to active set (null = all sets)
+      },
     ]);
   };
 
@@ -111,6 +156,66 @@ export default function EditRoutineScreen() {
       [next[index], next[target]] = [next[target], next[index]];
       return next;
     });
+  };
+
+  const addTodoToBlock = (key: string, text: string) => {
+    if (!text.trim()) return;
+    setBlocks((prev) =>
+      prev.map((b) =>
+        b.key === key
+          ? { ...b, todos: [...b.todos, { id: `todo_${Date.now()}_${Math.random().toString(36).slice(2)}`, text: text.trim() }] }
+          : b,
+      ),
+    );
+  };
+
+  const removeTodoFromBlock = (blockKey: string, todoId: string) => {
+    setBlocks((prev) =>
+      prev.map((b) =>
+        b.key === blockKey ? { ...b, todos: b.todos.filter((t) => t.id !== todoId) } : b,
+      ),
+    );
+  };
+
+  // ─── Block Set ops ────────────────────────────────────────────
+  const addBlockSet = async () => {
+    const name = newSetName.trim();
+    if (!name || !db || !id) return;
+    try {
+      const newId = await createRoutineBlockSet(db, id, name, blockSets.length === 0);
+      const fresh = await getRoutineBlockSets(db, id);
+      setBlockSets(fresh as any);
+      setActiveSetId(newId);
+      setNewSetName('');
+    } catch (e) {
+      console.error('Failed to create block set:', e);
+    }
+  };
+
+  const removeBlockSet = (setId: string) => {
+    Alert.alert(
+      'Delete Set',
+      'Blocks in this set will be moved to "All". This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteRoutineBlockSet(db, setId);
+              const fresh = await getRoutineBlockSets(db, id!);
+              setBlockSets(fresh as any);
+              if (activeSetId === setId) setActiveSetId(null);
+              // Update local drafts: blocks that belonged to this set revert to null
+              setBlocks((prev) => prev.map((b) => b.blockSetId === setId ? { ...b, blockSetId: null } : b));
+            } catch (e) {
+              console.error('Failed to delete block set:', e);
+            }
+          },
+        },
+      ],
+    );
   };
 
   const adjustDuration = (key: string, delta: number) => {
@@ -137,12 +242,14 @@ export default function EditRoutineScreen() {
     }
     setSaving(true);
     try {
-      // Update routine metadata
+      // Update routine metadata (including V2 mode + pillar)
       await updateRoutine(db, id, {
         name: trimmedName,
         description: description.trim() || undefined,
         totalDurationMinutes: totalMinutes,
-      });
+        mode: routineMode,
+        pillar: routinePillar,
+      } as any);
 
       // Determine which blocks were removed
       const currentDbIds = blocks.filter((b) => b.dbId).map((b) => b.dbId!);
@@ -151,16 +258,24 @@ export default function EditRoutineScreen() {
         await deleteRoutineBlock(db, rid);
       }
 
-      // Upsert blocks
+      // Upsert blocks with V2 fields
       for (let i = 0; i < blocks.length; i++) {
         const b = blocks[i];
+        const v2Fields = {
+          todos: JSON.stringify(b.todos),
+          blockMode: b.blockMode,
+          goalTarget: b.goalTarget ? parseInt(b.goalTarget, 10) : null,
+          liftTag: b.liftTag.trim() || null,
+          blockSetId: b.blockSetId ?? null,
+        };
         if (b.dbId) {
           await updateRoutineBlock(db, b.dbId, {
             name: b.name,
             durationMinutes: b.durationMinutes,
             type: b.type,
             order: i,
-          });
+            ...v2Fields,
+          } as any);
         } else {
           await createRoutineBlock(db, {
             routineId: id,
@@ -168,7 +283,8 @@ export default function EditRoutineScreen() {
             durationMinutes: b.durationMinutes,
             type: b.type,
             order: i,
-          });
+            ...v2Fields,
+          } as any);
         }
       }
 
@@ -215,21 +331,142 @@ export default function EditRoutineScreen() {
           multiline
         />
 
+        {/* V2: Routine Mode */}
+        <Text style={[styles.label, { color: themeColors.muted }]}>Mode</Text>
+        <View style={styles.modeRow}>
+          {(['sequential', 'countup_list'] as const).map((m) => (
+            <Pressable
+              key={m}
+              style={[
+                styles.modeChip,
+                { borderColor: themeColors.border },
+                routineMode === m && { borderColor: themeColors.accent, backgroundColor: themeColors.accentLight },
+              ]}
+              onPress={() => setRoutineMode(m)}
+            >
+              <Text style={[styles.modeChipText, { color: themeColors.muted }, routineMode === m && { color: themeColors.accent }]}>
+                {m === 'sequential' ? 'Sequential (Timed)' : 'Count-Up List'}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+
+        {/* V2: Routine Pillar */}
+        <Text style={[styles.label, { color: themeColors.muted }]}>Pillar</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: spacing.sm }}>
+          <View style={styles.addRow}>
+            {(['general', 'gym', 'academic', 'life'] as const).map((p) => (
+              <Pressable
+                key={p}
+                style={[
+                  styles.addBtn,
+                  { borderColor: themeColors.border },
+                  routinePillar === p && { borderColor: themeColors.accent, backgroundColor: themeColors.accentLight, borderStyle: 'solid' },
+                ]}
+                onPress={() => setRoutinePillar(p)}
+              >
+                <Text style={[styles.addBtnText, { color: themeColors.muted }, routinePillar === p && { color: themeColors.accent }]}>
+                  {p.charAt(0).toUpperCase() + p.slice(1)}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        </ScrollView>
+
         {/* Summary */}
         <View style={styles.summaryRow}>
           <Text style={[styles.summaryLabel, { color: themeColors.muted }]}>{blocks.length} {blocks.length === 1 ? 'block' : 'blocks'}</Text>
           <Text style={[styles.summaryLabel, { color: themeColors.muted }]}>{formatDuration(totalMinutes)} total</Text>
         </View>
 
+        {/* V2: Feature 3 - Block Sets tab bar */}
+        <Text style={[styles.label, { marginTop: spacing.md, color: themeColors.muted }]}>Block Sets</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: spacing.xs }}>
+          <View style={{ flexDirection: 'row', gap: spacing.xs, alignItems: 'center' }}>
+            {/* "All" tab */}
+            <Pressable
+              style={[
+                styles.setTab,
+                { borderColor: themeColors.border },
+                activeSetId === null && { borderColor: themeColors.accent, backgroundColor: themeColors.accentLight },
+              ]}
+              onPress={() => setActiveSetId(null)}
+            >
+              <Text style={[styles.setTabText, { color: themeColors.muted }, activeSetId === null && { color: themeColors.accent }]}>All</Text>
+            </Pressable>
+            {blockSets.map((set) => (
+              <Pressable
+                key={set.id}
+                style={[
+                  styles.setTab,
+                  { borderColor: themeColors.border },
+                  activeSetId === set.id && { borderColor: themeColors.accent, backgroundColor: themeColors.accentLight },
+                ]}
+                onPress={() => setActiveSetId(set.id)}
+                onLongPress={() => removeBlockSet(set.id)}
+              >
+                <Text style={[styles.setTabText, { color: themeColors.muted }, activeSetId === set.id && { color: themeColors.accent }]}>
+                  {set.name}{set.isDefault ? ' ★' : ''}
+                </Text>
+              </Pressable>
+            ))}
+            {/* Add new set inline */}
+            <View style={[styles.setAddRow, { borderColor: themeColors.border }]}>
+              <TextInput
+                style={[styles.setNameInput, { color: themeColors.text }]}
+                value={newSetName}
+                onChangeText={setNewSetName}
+                placeholder="New set…"
+                placeholderTextColor={themeColors.muted}
+                returnKeyType="done"
+                onSubmitEditing={addBlockSet}
+              />
+              <Pressable hitSlop={8} onPress={addBlockSet}>
+                <Feather name="plus" size={16} color={themeColors.accent} />
+              </Pressable>
+            </View>
+          </View>
+        </ScrollView>
+        {blockSets.length > 0 && (
+          <Text style={[styles.setHint, { color: themeColors.muted }]}>
+            {activeSetId === null
+              ? 'Showing all blocks. Tap a set to filter.'
+              : `Blocks assigned to "${blockSets.find((s) => s.id === activeSetId)?.name}".`}
+            {'  Long-press a set tab to delete it.'}
+          </Text>
+        )}
+
         {/* Blocks */}
         <Text style={[styles.label, { marginTop: spacing.md, color: themeColors.muted }]}>Blocks</Text>
-        {blocks.map((block, index) => (
+        {blocks
+          .map((block, origIndex) => ({ block, origIndex }))
+          .filter(({ block }) => activeSetId === null || block.blockSetId === activeSetId || block.blockSetId === null)
+          .map(({ block, origIndex: index }) => (
           <View key={block.key} style={[styles.blockCard, { backgroundColor: themeColors.surface, borderColor: themeColors.border }]}>
             <View style={styles.blockHeader}>
               <View style={[styles.typeBadge, { backgroundColor: TYPE_COLORS[block.type] + '20' }]}>
                 <Feather name={TYPE_ICONS[block.type] as any} size={14} color={TYPE_COLORS[block.type]} />
                 <Text style={[styles.typeText, { color: TYPE_COLORS[block.type] }]}>{block.type}</Text>
               </View>
+              {/* V2: Feature 3 - show/assign set when sets exist */}
+              {blockSets.length > 0 && (
+                <Pressable
+                  style={[styles.setChip, { borderColor: themeColors.border }]}
+                  onPress={() => {
+                    // Cycle: null → first set → ... → last set → null
+                    const allIds = [null, ...blockSets.map((s) => s.id)];
+                    const current = block.blockSetId;
+                    const idx = allIds.indexOf(current);
+                    const next = allIds[(idx + 1) % allIds.length] ?? null;
+                    updateBlockDraft(block.key, { blockSetId: next });
+                  }}
+                >
+                  <Feather name="layers" size={11} color={themeColors.muted} />
+                  <Text style={[styles.setChipText, { color: themeColors.muted }]}>
+                    {block.blockSetId ? (blockSets.find((s) => s.id === block.blockSetId)?.name ?? 'Set') : 'All'}
+                  </Text>
+                </Pressable>
+              )}
               <View style={styles.blockActions}>
                 <Pressable onPress={() => moveBlock(index, -1)} hitSlop={8}>
                   <Feather name="arrow-up" size={16} color={index === 0 ? themeColors.border : themeColors.muted} />
@@ -278,6 +515,94 @@ export default function EditRoutineScreen() {
                 </Pressable>
               ))}
             </ScrollView>
+
+            {/* V2: Feature 2 - Block Mode */}
+            <View style={styles.blockModeRow}>
+              {(['timed', 'goal_based', 'countup'] as const).map((m) => (
+                <Pressable
+                  key={m}
+                  style={[
+                    styles.blockModeChip,
+                    { borderColor: themeColors.border },
+                    block.blockMode === m && { borderColor: themeColors.accent, backgroundColor: themeColors.accentLight },
+                  ]}
+                  onPress={() => updateBlockDraft(block.key, { blockMode: m })}
+                >
+                  <Text style={[styles.pillText, { color: themeColors.muted }, block.blockMode === m && { color: themeColors.accent }]}>
+                    {m === 'timed' ? 'Timed' : m === 'goal_based' ? 'Goal' : 'Free'}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+            {block.blockMode === 'goal_based' && (
+              <TextInput
+                style={[styles.blockNameInput, { color: themeColors.text, borderBottomColor: themeColors.border }]}
+                value={block.goalTarget}
+                onChangeText={(t) => updateBlockDraft(block.key, { goalTarget: t })}
+                placeholder="Target count (e.g. 30)"
+                placeholderTextColor={themeColors.muted}
+                keyboardType="numeric"
+              />
+            )}
+
+            {/* V2: Feature 9 - Lift tag */}
+            {block.type === 'focus' && (
+              <TextInput
+                style={[styles.blockNameInput, { color: themeColors.text, borderBottomColor: themeColors.border, marginTop: spacing.xs }]}
+                value={block.liftTag}
+                onChangeText={(t) => updateBlockDraft(block.key, { liftTag: t })}
+                placeholder="Lift tag (e.g. Bench Press)"
+                placeholderTextColor={themeColors.muted}
+              />
+            )}
+
+            {/* V2: Feature 4 - Block Todos */}
+            <Pressable
+              style={[styles.todoToggle, { borderColor: themeColors.border }]}
+              onPress={() => setExpandedBlockKey(expandedBlockKey === block.key ? null : block.key)}
+            >
+              <Feather name="check-square" size={14} color={block.todos.length > 0 ? themeColors.accent : themeColors.muted} />
+              <Text style={[styles.todoToggleText, { color: block.todos.length > 0 ? themeColors.accent : themeColors.muted }]}>
+                To-dos ({block.todos.length})
+              </Text>
+              <Feather name={expandedBlockKey === block.key ? 'chevron-up' : 'chevron-down'} size={14} color={themeColors.muted} />
+            </Pressable>
+            {expandedBlockKey === block.key && (
+              <View style={styles.todoSection}>
+                {block.todos.map((todo) => (
+                  <View key={todo.id} style={styles.todoRow}>
+                    <Feather name="circle" size={14} color={themeColors.muted} />
+                    <Text style={[styles.todoText, { color: themeColors.text }]}>{todo.text}</Text>
+                    <Pressable hitSlop={8} onPress={() => removeTodoFromBlock(block.key, todo.id)}>
+                      <Feather name="x" size={14} color={themeColors.muted} />
+                    </Pressable>
+                  </View>
+                ))}
+                <View style={styles.todoAddRow}>
+                  <TextInput
+                    style={[styles.todoInput, { color: themeColors.text, borderColor: themeColors.border, backgroundColor: themeColors.background }]}
+                    placeholder="Add todo…"
+                    placeholderTextColor={themeColors.muted}
+                    value={expandedBlockKey === block.key ? newTodoText : ''}
+                    onChangeText={setNewTodoText}
+                    onSubmitEditing={() => {
+                      addTodoToBlock(block.key, newTodoText);
+                      setNewTodoText('');
+                    }}
+                    returnKeyType="done"
+                  />
+                  <Pressable
+                    style={[styles.todoAddBtn, { backgroundColor: themeColors.accent }]}
+                    onPress={() => {
+                      addTodoToBlock(block.key, newTodoText);
+                      setNewTodoText('');
+                    }}
+                  >
+                    <Feather name="plus" size={16} color="#fff" />
+                  </Pressable>
+                </View>
+              </View>
+            )}
           </View>
         ))}
 
@@ -462,5 +787,125 @@ const styles = StyleSheet.create({
   saveBtnText: {
     fontSize: fontSize.md,
     fontWeight: '600',
+  },
+  // V2 styles
+  modeRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  modeChip: {
+    flex: 1,
+    paddingVertical: spacing.sm,
+    borderRadius: borderRadius.md,
+    borderWidth: 1,
+    alignItems: 'center',
+  },
+  modeChipText: {
+    fontSize: fontSize.sm,
+    fontWeight: '500',
+  },
+  blockModeRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginTop: spacing.xs,
+  },
+  blockModeChip: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: borderRadius.sm,
+    borderWidth: 1,
+  },
+  todoToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    marginTop: spacing.sm,
+    paddingTop: spacing.xs,
+    borderTopWidth: 1,
+  },
+  todoToggleText: {
+    flex: 1,
+    fontSize: fontSize.xs,
+    fontWeight: '600',
+  },
+  todoSection: {
+    marginTop: spacing.xs,
+    gap: spacing.xs,
+  },
+  todoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  todoText: {
+    flex: 1,
+    fontSize: fontSize.sm,
+  },
+  todoAddRow: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+    marginTop: 2,
+  },
+  todoInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: borderRadius.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    fontSize: fontSize.sm,
+  },
+  todoAddBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: borderRadius.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // V2: Feature 3 - Block Sets
+  setTab: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: borderRadius.sm,
+    borderWidth: 1,
+    borderStyle: 'dashed' as const,
+  },
+  setTabText: {
+    fontSize: fontSize.xs,
+    fontWeight: '600',
+  },
+  setAddRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: borderRadius.sm,
+    borderWidth: 1,
+    borderStyle: 'dashed' as const,
+  },
+  setNameInput: {
+    fontSize: fontSize.xs,
+    minWidth: 80,
+    maxWidth: 120,
+    paddingVertical: 0,
+  },
+  setHint: {
+    fontSize: fontSize.xs,
+    marginBottom: spacing.xs,
+    fontStyle: 'italic',
+  },
+  setChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 2,
+    borderRadius: 4,
+    borderWidth: 1,
+  },
+  setChipText: {
+    fontSize: 10,
+    fontWeight: '500',
   },
 });

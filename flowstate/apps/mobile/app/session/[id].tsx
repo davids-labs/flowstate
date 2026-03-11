@@ -266,20 +266,20 @@ export default function SessionScreen() {
           status: "in_progress",
           startedAt: new Date().toISOString(),
         }).catch(() => {});
-        createSessionEvent(db, { sessionId: currentSessionId, type: "timer_started" }).catch(() => {});
+        createSessionEvent(db, { sessionId: currentSessionId, type: 'started' }).catch(() => {});
       }
       pushTimerSync();
     } else if (phase === "running" || phase === "overdue") {
       pause();
       persistTimerState('in_progress');
       if (db && currentSessionId)
-        createSessionEvent(db, { sessionId: currentSessionId, type: "timer_paused" }).catch(() => {});
+        createSessionEvent(db, { sessionId: currentSessionId, type: 'paused' }).catch(() => {});
       pushTimerSync();
     } else if (phase === "paused") {
       resume();
       persistTimerState('in_progress');
       if (db && currentSessionId)
-        createSessionEvent(db, { sessionId: currentSessionId, type: "timer_resumed" }).catch(() => {});
+        createSessionEvent(db, { sessionId: currentSessionId, type: 'resumed' }).catch(() => {});
       pushTimerSync();
     } else if (phase === "completed") {
       router.replace(`/session/debrief?sessionId=${currentSessionId}`);
@@ -304,7 +304,7 @@ export default function SessionScreen() {
           status: "completed",
           endedAt: new Date().toISOString(),
         });
-        await createSessionEvent(db, { sessionId: currentSessionId, type: "session_completed" });
+        await createSessionEvent(db, { sessionId: currentSessionId, type: 'ended' });
         syncSession(currentSessionId, { status: "completed", endedAt: new Date().toISOString() });
         pushTimerSync();
       } catch (e) {

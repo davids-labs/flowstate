@@ -14,6 +14,7 @@ export const MODULE_TYPES = [
   'photo_log',
   'routine_launcher',
   'timer',
+  'reminder',
 ] as const;
 
 export type ModuleType = (typeof MODULE_TYPES)[number];
@@ -119,6 +120,13 @@ export interface TimerModuleConfig {
   defaultDurationSeconds: number; // e.g. 1500 for 25min pomodoro
 }
 
+export interface ReminderConfig {
+  message: string;
+  daysOfWeek: number[]; // 0=Sunday … 6=Saturday
+  time: string; // 'HH:MM' 24-hour
+  repeat: boolean;
+}
+
 export type ModuleConfig =
   | CountdownConfig
   | CountupConfig
@@ -132,7 +140,8 @@ export type ModuleConfig =
   | TallyConfig
   | PhotoLogConfig
   | RoutineLauncherConfig
-  | TimerModuleConfig;
+  | TimerModuleConfig
+  | ReminderConfig;
 
 // ─── ModuleSpec ─────────────────────────────────────────────────
 

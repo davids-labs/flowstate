@@ -5,6 +5,7 @@ import {
   collections,
   routines,
   routineBlocks,
+  routineBlockSets,
   plans,
   dayPlans,
   moduleSpecs,
@@ -12,6 +13,15 @@ import {
   sessions,
   eventLog,
   homescreenLayout,
+  tasks,
+  taskTags,
+  taggedTimeLogs,
+  sessionTags,
+  sessionBlockTodos,
+  sessionBlockInstructions,
+  courses,
+  courseComponents,
+  csvPlans,
 } from './schema';
 
 // We use `any` for the db type to support both expo-sqlite and better-sqlite3 drivers
@@ -66,7 +76,13 @@ export async function getRoutineBlocks(db: DB, routineId: string) {
 
 export async function createRoutineBlock(
   db: DB,
-  data: { routineId: string; name: string; durationMinutes: number; type: string; order: number; moduleIds?: string[] },
+  data: {
+    routineId: string; name: string; durationMinutes: number; type: string; order: number;
+    moduleIds?: string[];
+    // V2 optional fields
+    todos?: string; blockMode?: string; goalTarget?: number | null; liftTag?: string | null;
+    blockSetId?: string | null; condition?: string | null;
+  },
 ) {
   const id = generateId();
   await db.insert(routineBlocks).values({
@@ -80,7 +96,12 @@ export async function createRoutineBlock(
 export async function updateRoutineBlock(
   db: DB,
   id: string,
-  data: Partial<{ name: string; durationMinutes: number; type: string; order: number; moduleIds: string[] }>,
+  data: Partial<{
+    name: string; durationMinutes: number; type: string; order: number; moduleIds: string[];
+    // V2 fields
+    todos: string; blockMode: string; goalTarget: number | null; liftTag: string | null;
+    blockSetId: string | null; condition: string | null;
+  }>,
 ) {
   const updateData: Record<string, unknown> = {};
   if (data.name !== undefined) updateData.name = data.name;
@@ -88,11 +109,84 @@ export async function updateRoutineBlock(
   if (data.type !== undefined) updateData.type = data.type;
   if (data.order !== undefined) updateData.order = data.order;
   if (data.moduleIds !== undefined) updateData.moduleIds = JSON.stringify(data.moduleIds);
+  // V2 fields
+  if (data.todos !== undefined) updateData.todos = data.todos;
+  if (data.blockMode !== undefined) updateData.blockMode = data.blockMode;
+  if ('goalTarget' in data) updateData.goalTarget = data.goalTarget;
+  if ('liftTag' in data) updateData.liftTag = data.liftTag;
+  if ('blockSetId' in data) updateData.blockSetId = data.blockSetId;
+  if ('condition' in data) updateData.condition = data.condition;
   await db.update(routineBlocks).set(updateData).where(eq(routineBlocks.id, id));
 }
 
 export async function deleteRoutineBlock(db: DB, id: string) {
   await db.delete(routineBlocks).where(eq(routineBlocks.id, id));
+}
+
+// ─── Routine Block Sets (Feature 3 - Variable Block Sets) ────────
+
+export async function getRoutineBlockSets(db: DB, routineId: string) {
+  return db
+    .select()
+    .from(routineBlockSets)
+    .where(eq(routineBlockSets.routineId, routineId))
+    .orderBy(asc(routineBlockSets.name));
+}
+
+export async function createRoutineBlockSet(
+  db: DB,
+  routineId: string,
+  name: string,
+  isDefault = false,
+): Promise<string> {
+  const id = generateId();
+  await db.insert(routineBlockSets).values({
+    id,
+    routineId,
+    name,
+    isDefault: isDefault ? 1 : 0,
+  });
+  return id;
+}
+
+export async function updateRoutineBlockSet(
+  db: DB,
+  id: string,
+  data: Partial<{ name: string; isDefault: boolean }>,
+) {
+  const u: Record<string, unknown> = {};
+  if (data.name !== undefined) u.name = data.name;
+  if (data.isDefault !== undefined) u.isDefault = data.isDefault ? 1 : 0;
+  await db.update(routineBlockSets).set(u).where(eq(routineBlockSets.id, id));
+}
+
+export async function deleteRoutineBlockSet(db: DB, id: string) {
+  // Blocks in this set revert to "all sets" (blockSetId = null)
+  await db.update(routineBlocks).set({ blockSetId: null }).where(eq(routineBlocks.blockSetId, id));
+  await db.delete(routineBlockSets).where(eq(routineBlockSets.id, id));
+}
+
+/** Returns blocks for a specific set.
+ *  setId = null  → return all blocks for the routine (used when no sets are defined or viewing "All").
+ *  setId = string → blocks assigned to that set (blockSetId === setId) OR unassigned (blockSetId IS NULL). */
+export async function getRoutineBlocksForSet(db: DB, routineId: string, setId: string | null) {
+  if (setId === null) {
+    return db
+      .select()
+      .from(routineBlocks)
+      .where(eq(routineBlocks.routineId, routineId))
+      .orderBy(asc(routineBlocks.order));
+  }
+  return db
+    .select()
+    .from(routineBlocks)
+    .where(
+      and(
+        eq(routineBlocks.routineId, routineId),
+        sql`(${routineBlocks.blockSetId} = ${setId} OR ${routineBlocks.blockSetId} IS NULL)`,
+      ),
+    )
+    .orderBy(asc(routineBlocks.order));
 }
 
 // ─── Plans ──────────────────────────────────────────────────────
@@ -373,14 +467,14 @@ export async function getSession(db: DB, id: string) {
 
 export async function createSession(
   db: DB,
-  data: { dayPlanId: string; routineId: string; routineName: string; scheduledTime?: string; moduleId?: string; tags?: string[] },
+  data: { dayPlanId?: string; routineId?: string; routineName: string; scheduledTime?: string; moduleId?: string; tags?: string[] },
 ) {
   const id = generateId();
   const now = nowISO();
   await db.insert(sessions).values({
     id,
-    dayPlanId: data.dayPlanId,
-    routineId: data.routineId,
+    dayPlanId: data.dayPlanId ?? null,
+    routineId: data.routineId ?? null,
     routineName: data.routineName,
     moduleId: data.moduleId ?? null,
     scheduledTime: data.scheduledTime ?? null,
@@ -433,6 +527,42 @@ export async function deleteSession(db: DB, id: string) {
   // Delete event log entries first (foreign key)
   await db.delete(eventLog).where(eq(eventLog.sessionId, id));
   await db.delete(sessions).where(eq(sessions.id, id));
+}
+
+// ─── Batch / Mass-Edit Operations (Feature 13) ───────────────────────────────
+
+/**
+ * Update multiple sessions with a partial data payload.
+ * Used by MassEditSheet for bulk reschedule, mark-complete, tag, etc.
+ */
+export async function batchUpdateSessions(
+  db: DB,
+  ids: string[],
+  updates: Partial<{
+    status: string;
+    scheduledDate: string;
+    scheduledTime: string | null;
+    pillar: string | null;
+  }>,
+): Promise<void> {
+  if (ids.length === 0) return;
+  const ts = nowISO();
+  for (const id of ids) {
+    await db.update(sessions)
+      .set({ ...updates, updatedAt: ts })
+      .where(eq(sessions.id, id));
+  }
+}
+
+/**
+ * Delete multiple sessions and their event log entries.
+ */
+export async function batchDeleteSessions(db: DB, ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  for (const id of ids) {
+    await db.delete(eventLog).where(eq(eventLog.sessionId, id));
+    await db.delete(sessions).where(eq(sessions.id, id));
+  }
 }
 
 // ─── Event Log ──────────────────────────────────────────────────
@@ -724,19 +854,674 @@ export async function addSessionPhoto(db: DB, sessionId: string, photoUri: strin
   await db.update(sessions).set({ photos: JSON.stringify(photos), updatedAt: nowISO() }).where(eq(sessions.id, sessionId));
 }
 
-export async function getSessionPhotos(db: DB, moduleId?: string): Promise<Array<{ sessionId: string; uri: string; date: string }>> {
-  let allSessions: any[];
+// BUG-01: Rewritten to query moduleValues where PhotoLogCard actually stores photos.
+// PhotoLogCard stores a comma-separated list of filenames in moduleValues.value.
+// Pass photoBaseDir (e.g. FileSystem.documentDirectory + 'photos/') to get full URIs.
+export async function getSessionPhotos(
+  db: DB,
+  moduleId?: string,
+  photoBaseDir = '',
+): Promise<Array<{ sessionId: string; uri: string; date: string }>> {
+  // Determine which photo_log modules to query
+  let photoModuleIds: string[];
   if (moduleId) {
-    allSessions = await db.select().from(sessions).where(eq(sessions.moduleId, moduleId));
+    photoModuleIds = [moduleId];
   } else {
-    allSessions = await db.select().from(sessions);
+    const specs = await db
+      .select({ id: moduleSpecs.id })
+      .from(moduleSpecs)
+      .where(eq(moduleSpecs.type, 'photo_log'));
+    photoModuleIds = specs.map((s: any) => s.id);
   }
+
+  if (photoModuleIds.length === 0) return [];
+
+  const rows = await db
+    .select()
+    .from(moduleValues)
+    .where(inArray(moduleValues.moduleId, photoModuleIds));
+
   const results: Array<{ sessionId: string; uri: string; date: string }> = [];
-  for (const s of allSessions) {
-    const photos: string[] = JSON.parse(s.photos || '[]');
-    for (const uri of photos) {
-      results.push({ sessionId: s.id, uri, date: s.startedAt ?? s.createdAt });
+  for (const row of rows) {
+    // value is a comma-separated list of filenames (set by PhotoLogCard)
+    const filenames = (row.value || '').split(',').filter(Boolean);
+    for (const filename of filenames) {
+      const uri = photoBaseDir ? `${photoBaseDir}${filename}` : filename;
+      results.push({
+        sessionId: row.sessionId ?? row.id,
+        uri,
+        date: row.loggedAt,
+      });
     }
   }
   return results;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// V2 QUERIES — Tasks, Tagged Time Logs, Courses, CSV Plans
+// ═══════════════════════════════════════════════════════════════
+
+// ─── Tasks (Feature 12) ─────────────────────────────────────────
+
+export async function getTasks(
+  db: DB,
+  opts?: { pillar?: string; completed?: boolean },
+): Promise<any[]> {
+  let query = db.select().from(tasks);
+  const conditions = [];
+  if (opts?.pillar) conditions.push(eq(tasks.pillar, opts.pillar));
+  if (opts?.completed !== undefined) {
+    conditions.push(eq(tasks.completed, opts.completed ? 1 : 0));
+  }
+  if (conditions.length > 0) {
+    query = query.where(and(...conditions));
+  }
+  return query.orderBy(asc(tasks.priority), asc(tasks.dueDate));
+}
+
+export async function getTask(db: DB, id: string): Promise<any | undefined> {
+  const rows = await db.select().from(tasks).where(eq(tasks.id, id));
+  return rows[0];
+}
+
+export async function createTask(
+  db: DB,
+  data: {
+    title: string;
+    pillar?: string;
+    category?: string;
+    dueDate?: string;
+    dueTime?: string;
+    priority?: number;
+    recurrence?: string;
+    notes?: string;
+    tags?: string[];
+  },
+): Promise<string> {
+  const id = generateId();
+  await db.insert(tasks).values({
+    id,
+    title: data.title,
+    pillar: data.pillar ?? 'general',
+    category: data.category ?? null,
+    dueDate: data.dueDate ?? null,
+    dueTime: data.dueTime ?? null,
+    priority: data.priority ?? 2,
+    completed: 0,
+    recurrence: data.recurrence ?? null,
+    notes: data.notes ?? null,
+    createdAt: nowISO(),
+  });
+  if (data.tags && data.tags.length > 0) {
+    for (const tag of data.tags) {
+      await db.insert(taskTags).values({ id: generateId(), taskId: id, tag });
+    }
+  }
+  return id;
+}
+
+export async function updateTask(
+  db: DB,
+  id: string,
+  data: Partial<{
+    title: string;
+    pillar: string;
+    category: string | null;
+    dueDate: string | null;
+    dueTime: string | null;
+    priority: number;
+    completed: boolean;
+    recurrence: string | null;
+    notes: string | null;
+  }>,
+): Promise<void> {
+  const patch: Record<string, any> = {};
+  if (data.title !== undefined) patch.title = data.title;
+  if (data.pillar !== undefined) patch.pillar = data.pillar;
+  if ('category' in data) patch.category = data.category;
+  if ('dueDate' in data) patch.dueDate = data.dueDate;
+  if ('dueTime' in data) patch.dueTime = data.dueTime;
+  if (data.priority !== undefined) patch.priority = data.priority;
+  if (data.completed !== undefined) patch.completed = data.completed ? 1 : 0;
+  if ('recurrence' in data) patch.recurrence = data.recurrence;
+  if ('notes' in data) patch.notes = data.notes;
+  if (Object.keys(patch).length > 0) {
+    await db.update(tasks).set(patch).where(eq(tasks.id, id));
+  }
+}
+
+export async function deleteTask(db: DB, id: string): Promise<void> {
+  await db.delete(taskTags).where(eq(taskTags.taskId, id));
+  await db.delete(tasks).where(eq(tasks.id, id));
+}
+
+export async function getTaskTags(db: DB, taskId: string): Promise<string[]> {
+  const rows = await db.select().from(taskTags).where(eq(taskTags.taskId, taskId));
+  return rows.map((r: any) => r.tag);
+}
+
+export async function setTaskTags(db: DB, taskId: string, newTags: string[]): Promise<void> {
+  await db.delete(taskTags).where(eq(taskTags.taskId, taskId));
+  for (const tag of newTags) {
+    await db.insert(taskTags).values({ id: generateId(), taskId, tag });
+  }
+}
+
+// ─── Tagged Time Logs (Feature 14) ──────────────────────────────
+
+export async function getTaggedTimeLogs(db: DB, opts?: { tag?: string; pillar?: string }): Promise<any[]> {
+  let query = db.select().from(taggedTimeLogs);
+  const conditions = [];
+  if (opts?.tag) conditions.push(eq(taggedTimeLogs.tag, opts.tag));
+  if (opts?.pillar) conditions.push(eq(taggedTimeLogs.pillar, opts.pillar));
+  if (conditions.length > 0) query = query.where(and(...conditions));
+  return query.orderBy(desc(taggedTimeLogs.startedAt));
+}
+
+export async function startTaggedTimer(
+  db: DB,
+  tag: string,
+  pillar = 'general',
+): Promise<string> {
+  const id = generateId();
+  await db.insert(taggedTimeLogs).values({
+    id,
+    tag,
+    pillar,
+    startedAt: nowISO(),
+    endedAt: null,
+    durationSeconds: 0,
+    notes: null,
+  });
+  return id;
+}
+
+export async function stopTaggedTimer(
+  db: DB,
+  id: string,
+  notes?: string,
+): Promise<void> {
+  const rows = await db.select().from(taggedTimeLogs).where(eq(taggedTimeLogs.id, id));
+  const row = rows[0];
+  if (!row) return;
+  const endedAt = nowISO();
+  const durationSeconds = Math.floor(
+    (new Date(endedAt).getTime() - new Date(row.startedAt).getTime()) / 1000,
+  );
+  await db.update(taggedTimeLogs).set({
+    endedAt,
+    durationSeconds,
+    notes: notes ?? null,
+  }).where(eq(taggedTimeLogs.id, id));
+}
+
+export async function getAllTaggedTimeTagNames(db: DB): Promise<string[]> {
+  const rows = await db.selectDistinct({ tag: taggedTimeLogs.tag }).from(taggedTimeLogs).orderBy(asc(taggedTimeLogs.tag));
+  return rows.map((r: any) => r.tag);
+}
+
+// ─── Session Tags (Part 4.1) ─────────────────────────────────────
+
+export async function getSessionTags(db: DB, sessionId: string): Promise<string[]> {
+  const rows = await db.select().from(sessionTags).where(eq(sessionTags.sessionId, sessionId));
+  return rows.map((r: any) => r.tag);
+}
+
+export async function addSessionTag(db: DB, sessionId: string, tag: string): Promise<void> {
+  await db.insert(sessionTags).values({
+    id: generateId(),
+    sessionId,
+    tag,
+    loggedAt: nowISO(),
+  });
+}
+
+export async function removeSessionTag(db: DB, sessionId: string, tag: string): Promise<void> {
+  await db.delete(sessionTags).where(
+    and(eq(sessionTags.sessionId, sessionId), eq(sessionTags.tag, tag)),
+  );
+}
+
+// ─── Session Block To-Dos (Feature 4) ────────────────────────────
+
+export async function getSessionBlockTodos(
+  db: DB,
+  sessionId: string,
+  blockIndex: number,
+): Promise<Array<{ todoId: string; checked: boolean }>> {
+  const rows = await db
+    .select()
+    .from(sessionBlockTodos)
+    .where(
+      and(
+        eq(sessionBlockTodos.sessionId, sessionId),
+        eq(sessionBlockTodos.blockIndex, blockIndex),
+      ),
+    );
+  return rows.map((r: any) => ({ todoId: r.todoId, checked: Boolean(r.checked) }));
+}
+
+export async function upsertSessionBlockTodo(
+  db: DB,
+  sessionId: string,
+  blockIndex: number,
+  todoId: string,
+  checked: boolean,
+): Promise<void> {
+  const existing = await db
+    .select()
+    .from(sessionBlockTodos)
+    .where(
+      and(
+        eq(sessionBlockTodos.sessionId, sessionId),
+        eq(sessionBlockTodos.blockIndex, blockIndex),
+        eq(sessionBlockTodos.todoId, todoId),
+      ),
+    );
+  if (existing.length > 0) {
+    await db
+      .update(sessionBlockTodos)
+      .set({ checked: checked ? 1 : 0 })
+      .where(
+        and(
+          eq(sessionBlockTodos.sessionId, sessionId),
+          eq(sessionBlockTodos.blockIndex, blockIndex),
+          eq(sessionBlockTodos.todoId, todoId),
+        ),
+      );
+  } else {
+    await db.insert(sessionBlockTodos).values({
+      id: generateId(),
+      sessionId,
+      blockIndex,
+      todoId,
+      checked: checked ? 1 : 0,
+    });
+  }
+}
+
+// ─── Session Block Instructions (Feature 5) ──────────────────────
+
+export async function getSessionBlockInstructions(
+  db: DB,
+  sessionId: string,
+  blockIndex: number,
+): Promise<string> {
+  const rows = await db
+    .select()
+    .from(sessionBlockInstructions)
+    .where(
+      and(
+        eq(sessionBlockInstructions.sessionId, sessionId),
+        eq(sessionBlockInstructions.blockIndex, blockIndex),
+      ),
+    );
+  return rows[0]?.instructions ?? '';
+}
+
+export async function upsertSessionBlockInstructions(
+  db: DB,
+  sessionId: string,
+  blockIndex: number,
+  instructions: string,
+): Promise<void> {
+  const existing = await db
+    .select()
+    .from(sessionBlockInstructions)
+    .where(
+      and(
+        eq(sessionBlockInstructions.sessionId, sessionId),
+        eq(sessionBlockInstructions.blockIndex, blockIndex),
+      ),
+    );
+  if (existing.length > 0) {
+    await db
+      .update(sessionBlockInstructions)
+      .set({ instructions, updatedAt: nowISO() })
+      .where(
+        and(
+          eq(sessionBlockInstructions.sessionId, sessionId),
+          eq(sessionBlockInstructions.blockIndex, blockIndex),
+        ),
+      );
+  } else {
+    await db.insert(sessionBlockInstructions).values({
+      id: generateId(),
+      sessionId,
+      blockIndex,
+      instructions,
+      updatedAt: nowISO(),
+    });
+  }
+}
+
+// ─── Courses & Grade Tracking (Feature 11) ───────────────────────
+
+export async function getCourses(db: DB): Promise<any[]> {
+  return db.select().from(courses).orderBy(asc(courses.name));
+}
+
+export async function getCourse(db: DB, id: string): Promise<any | undefined> {
+  const rows = await db.select().from(courses).where(eq(courses.id, id));
+  return rows[0];
+}
+
+export async function createCourse(
+  db: DB,
+  data: { name: string; pillar?: string; targetGrade?: number },
+): Promise<string> {
+  const id = generateId();
+  await db.insert(courses).values({
+    id,
+    name: data.name,
+    pillar: data.pillar ?? 'academic',
+    targetGrade: data.targetGrade ?? null,
+    createdAt: nowISO(),
+    updatedAt: nowISO(),
+  });
+  return id;
+}
+
+export async function updateCourse(
+  db: DB,
+  id: string,
+  data: Partial<{ name: string; targetGrade: number | null }>,
+): Promise<void> {
+  await db.update(courses).set({ ...data, updatedAt: nowISO() }).where(eq(courses.id, id));
+}
+
+export async function deleteCourse(db: DB, id: string): Promise<void> {
+  await db.delete(courseComponents).where(eq(courseComponents.courseId, id));
+  await db.delete(courses).where(eq(courses.id, id));
+}
+
+export async function getCourseComponents(db: DB, courseId: string): Promise<any[]> {
+  return db.select().from(courseComponents).where(eq(courseComponents.courseId, courseId));
+}
+
+export async function upsertCourseComponent(
+  db: DB,
+  data: { id?: string; courseId: string; name: string; weight: number; receivedGrade?: number | null },
+): Promise<string> {
+  const id = data.id ?? generateId();
+  const existing = await db.select().from(courseComponents).where(eq(courseComponents.id, id));
+  if (existing.length > 0) {
+    await db.update(courseComponents).set({
+      name: data.name,
+      weight: data.weight,
+      receivedGrade: data.receivedGrade ?? null,
+    }).where(eq(courseComponents.id, id));
+  } else {
+    await db.insert(courseComponents).values({
+      id,
+      courseId: data.courseId,
+      name: data.name,
+      weight: data.weight,
+      receivedGrade: data.receivedGrade ?? null,
+    });
+  }
+  return id;
+}
+
+export async function deleteCourseComponent(db: DB, id: string): Promise<void> {
+  await db.delete(courseComponents).where(eq(courseComponents.id, id));
+}
+
+/**
+ * Compute current weighted grade for a course.
+ * Returns null if no grades have been entered yet.
+ */
+export function computeWeightedGrade(
+  components: Array<{ weight: number; receivedGrade: number | null }>,
+): number | null {
+  const graded = components.filter((c) => c.receivedGrade !== null && c.receivedGrade !== undefined);
+  if (graded.length === 0) return null;
+  const totalWeight = graded.reduce((sum, c) => sum + c.weight, 0);
+  if (totalWeight === 0) return null;
+  const weightedSum = graded.reduce((sum, c) => sum + c.weight * (c.receivedGrade as number), 0);
+  return weightedSum / totalWeight;
+}
+
+// ─── CSV Plans (Part 7) ──────────────────────────────────────────
+
+export async function getCsvPlans(db: DB): Promise<any[]> {
+  return db.select().from(csvPlans).orderBy(desc(csvPlans.uploadedAt));
+}
+
+export async function createCsvPlan(
+  db: DB,
+  data: { name: string; description?: string; fileHash?: string },
+): Promise<string> {
+  const id = generateId();
+  await db.insert(csvPlans).values({
+    id,
+    name: data.name,
+    description: data.description ?? null,
+    uploadedAt: nowISO(),
+    isActive: 1,
+    fileHash: data.fileHash ?? null,
+  });
+  return id;
+}
+
+export async function deactivateCsvPlan(db: DB, id: string): Promise<void> {
+  await db.update(csvPlans).set({ isActive: 0 }).where(eq(csvPlans.id, id));
+}
+
+export async function activateCsvPlan(db: DB, id: string): Promise<void> {
+  await db.update(csvPlans).set({ isActive: 1 }).where(eq(csvPlans.id, id));
+}
+
+export async function updateCsvPlan(
+  db: DB,
+  id: string,
+  data: { name?: string; description?: string },
+): Promise<void> {
+  const updates: Record<string, unknown> = {};
+  if (data.name !== undefined) updates.name = data.name;
+  if (data.description !== undefined) updates.description = data.description;
+  if (Object.keys(updates).length > 0) {
+    await db.update(csvPlans).set(updates).where(eq(csvPlans.id, id));
+  }
+}
+
+export async function deleteCsvPlan(db: DB, id: string): Promise<void> {
+  // Delete associated sessions first
+  await db.delete(sessions).where(eq(sessions.csvPlanId, id));
+  // Delete associated day plan refs (set csvPlanId to null for day plans)
+  await db.update(dayPlans).set({ csvPlanId: null }).where(eq(dayPlans.csvPlanId, id));
+  // Delete the plan itself
+  await db.delete(csvPlans).where(eq(csvPlans.id, id));
+}
+
+/**
+ * Get stats for a CSV plan: session count and date range.
+ */
+export async function getCsvPlanStats(
+  db: DB,
+  planId: string,
+): Promise<{ sessionCount: number; earliestDate: string | null; latestDate: string | null }> {
+  const planSessions = await db
+    .select({ scheduledTime: sessions.scheduledTime, createdAt: sessions.createdAt })
+    .from(sessions)
+    .where(eq(sessions.csvPlanId, planId));
+
+  if (planSessions.length === 0) {
+    return { sessionCount: 0, earliestDate: null, latestDate: null };
+  }
+
+  const dates = planSessions.map(s => s.createdAt).filter(Boolean).sort();
+  return {
+    sessionCount: planSessions.length,
+    earliestDate: dates[0] ?? null,
+    latestDate: dates[dates.length - 1] ?? null,
+  };
+}
+
+/**
+ * Check for scheduling conflicts between active CSV plans.
+ * Returns count of overlapping sessions on the same day+time.
+ */
+export async function getCsvPlanConflicts(db: DB): Promise<number> {
+  const activePlans = await db.select().from(csvPlans).where(eq(csvPlans.isActive, 1));
+  if (activePlans.length < 2) return 0;
+
+  const planIds = activePlans.map(p => p.id);
+  const allSessions = await db
+    .select({
+      id: sessions.id,
+      csvPlanId: sessions.csvPlanId,
+      scheduledTime: sessions.scheduledTime,
+      dayPlanId: sessions.dayPlanId,
+    })
+    .from(sessions)
+    .where(sql`${sessions.csvPlanId} IN (${sql.raw(planIds.map(id => `'${id}'`).join(','))})`);
+
+  // Group by dayPlanId + scheduledTime and check for multi-plan overlap
+  const timeSlots: Record<string, Set<string>> = {};
+  for (const s of allSessions) {
+    const key = `${s.dayPlanId ?? ''}__${s.scheduledTime ?? ''}`;
+    if (!timeSlots[key]) timeSlots[key] = new Set();
+    if (s.csvPlanId) timeSlots[key].add(s.csvPlanId);
+  }
+
+  let conflicts = 0;
+  for (const plans of Object.values(timeSlots)) {
+    if (plans.size > 1) conflicts++;
+  }
+  return conflicts;
+}
+
+// ─── Gym Volume & PR Queries (Feature 9) ────────────────────────
+
+/**
+ * Get volume (total value logged) per data_input module grouped by date.
+ * Only returns modules with a primaryLift config field.
+ * Returns: Array<{ moduleId, label, primaryLift, date, totalVolume }>
+ */
+export async function getVolumeByLift(
+  db: DB,
+  opts?: { startDate?: string; endDate?: string },
+): Promise<Array<{ moduleId: string; label: string; primaryLift: string; date: string; totalVolume: number }>> {
+  // Get all data_input modules with primaryLift
+  const specs = await db.select().from(moduleSpecs).where(eq(moduleSpecs.type, 'data_input'));
+  const liftModules = specs.filter((s) => {
+    const cfg = typeof s.config === 'string' ? JSON.parse(s.config) : (s.config ?? {});
+    return !!cfg.primaryLift;
+  });
+
+  if (liftModules.length === 0) return [];
+
+  const results: Array<{ moduleId: string; label: string; primaryLift: string; date: string; totalVolume: number }> = [];
+
+  for (const mod of liftModules) {
+    const cfg = typeof mod.config === 'string' ? JSON.parse(mod.config) : (mod.config ?? {});
+    let query = db
+      .select({
+        date: moduleValues.date,
+        value: moduleValues.value,
+      })
+      .from(moduleValues)
+      .where(eq(moduleValues.moduleId, mod.id));
+
+    const rows = await query;
+
+    // Group by date
+    const byDate: Record<string, number> = {};
+    for (const row of rows) {
+      const d = row.date;
+      if (opts?.startDate && d < opts.startDate) continue;
+      if (opts?.endDate && d > opts.endDate) continue;
+      const num = parseFloat(row.value) || 0;
+      byDate[d] = (byDate[d] ?? 0) + num;
+    }
+
+    for (const [date, totalVolume] of Object.entries(byDate)) {
+      results.push({
+        moduleId: mod.id,
+        label: mod.label,
+        primaryLift: cfg.primaryLift,
+        date,
+        totalVolume,
+      });
+    }
+  }
+
+  return results.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/**
+ * Get personal records (max value per data_input module with primaryLift).
+ * Returns: Array<{ moduleId, label, primaryLift, maxValue, date }>
+ */
+export async function getPRsAllLifts(
+  db: DB,
+): Promise<Array<{ moduleId: string; label: string; primaryLift: string; maxValue: number; date: string }>> {
+  const specs = await db.select().from(moduleSpecs).where(eq(moduleSpecs.type, 'data_input'));
+  const liftModules = specs.filter((s) => {
+    const cfg = typeof s.config === 'string' ? JSON.parse(s.config) : (s.config ?? {});
+    return !!cfg.primaryLift;
+  });
+
+  if (liftModules.length === 0) return [];
+
+  const results: Array<{ moduleId: string; label: string; primaryLift: string; maxValue: number; date: string }> = [];
+
+  for (const mod of liftModules) {
+    const cfg = typeof mod.config === 'string' ? JSON.parse(mod.config) : (mod.config ?? {});
+    const rows = await db
+      .select({ date: moduleValues.date, value: moduleValues.value })
+      .from(moduleValues)
+      .where(eq(moduleValues.moduleId, mod.id));
+
+    let maxVal = 0;
+    let maxDate = '';
+    for (const row of rows) {
+      const num = parseFloat(row.value) || 0;
+      if (num > maxVal) {
+        maxVal = num;
+        maxDate = row.date;
+      }
+    }
+
+    if (maxVal > 0) {
+      results.push({
+        moduleId: mod.id,
+        label: mod.label,
+        primaryLift: cfg.primaryLift,
+        maxValue: maxVal,
+        date: maxDate,
+      });
+    }
+  }
+
+  return results.sort((a, b) => b.maxValue - a.maxValue);
+}
+
+/**
+ * Get gym session frequency by week.
+ * Returns: Array<{ week: string (YYYY-WXX), count: number }>
+ */
+export async function getGymSessionFrequency(
+  db: DB,
+): Promise<Array<{ week: string; count: number }>> {
+  const gymSessions = await db
+    .select({ startedAt: sessions.startedAt })
+    .from(sessions)
+    .where(eq(sessions.pillar, 'gym'));
+
+  const byWeek: Record<string, number> = {};
+  for (const s of gymSessions) {
+    if (!s.startedAt) continue;
+    const d = new Date(s.startedAt);
+    const year = d.getFullYear();
+    const oneJan = new Date(year, 0, 1);
+    const weekNum = Math.ceil(((d.getTime() - oneJan.getTime()) / 86400000 + oneJan.getDay() + 1) / 7);
+    const key = `${year}-W${String(weekNum).padStart(2, '0')}`;
+    byWeek[key] = (byWeek[key] ?? 0) + 1;
+  }
+
+  return Object.entries(byWeek)
+    .map(([week, count]) => ({ week, count }))
+    .sort((a, b) => a.week.localeCompare(b.week));
 }

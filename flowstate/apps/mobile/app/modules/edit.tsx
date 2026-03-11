@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, TextInput, Pressable, Switch, Alert, StyleSheet } from 'react-native';
+import { View, Text, TextInput, Pressable, Switch, Alert, StyleSheet, ScrollView } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -9,6 +9,7 @@ import { getModuleSpec, updateModuleSpec } from '@flowstate/core';
 import { useDatabaseSafe } from '../../components/DatabaseProvider';
 import { fontSize, spacing, borderRadius } from '../../constants/theme';
 import { useTheme } from '../../constants/ThemeContext';
+import { scheduleStreakReminder, cancelStreakReminder, scheduleModuleReminder, cancelModuleReminder } from '../../services/notifications';
 
 const TYPE_LABELS: Record<string, string> = {
   countdown: 'Countdown',
@@ -24,6 +25,7 @@ const TYPE_LABELS: Record<string, string> = {
   photo_log: 'Photo Log',
   group: 'Group',
   routine_launcher: 'Routine Launcher',
+  reminder: 'Reminder',
 };
 
 const ALL_SURFACES = ['homescreen', 'day', 'session', 'plan', 'week'] as const;
@@ -41,6 +43,10 @@ export default function EditModuleScreen() {
   const [emoji, setEmoji] = useState('');
   const [isLive, setIsLive] = useState(false);
   const [required, setRequired] = useState(false);
+  // V2: Life Pillar + Feature 8 (Streaks)
+  const [pillar, setPillar] = useState<string>('general');
+  const [streakEnabled, setStreakEnabled] = useState(false);
+  const [streakCheckInTime, setStreakCheckInTime] = useState('');
 
   // Config fields
   const [targetDate, setTargetDate] = useState('');
@@ -48,12 +54,22 @@ export default function EditModuleScreen() {
   const [originDate, setOriginDate] = useState('');
   const [unit, setUnit] = useState('');
   const [target, setTarget] = useState('');
+  const [primaryLift, setPrimaryLift] = useState('');
   const [sourceModuleId, setSourceModuleId] = useState('');
   const [prompt, setPrompt] = useState('');
   const [intention, setIntention] = useState('');
   const [groupChildren, setGroupChildren] = useState('');
   const [countupVariant, setCountupVariant] = useState<'standard' | 'last_seen'>('standard');
   const [resetOnModuleId, setResetOnModuleId] = useState('');
+
+  // Feature 7: Reminder config state
+  const [reminderMessage, setReminderMessage] = useState('');
+  const [reminderTime, setReminderTime] = useState('09:00');
+  const [reminderDays, setReminderDays] = useState<number[]>([1, 2, 3, 4, 5]);
+  const [reminderRepeat, setReminderRepeat] = useState(true);
+  const toggleReminderDay = (d: number) => {
+    setReminderDays(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d].sort());
+  };
 
   // Placements
   const [placements, setPlacements] = useState<string[]>(['day']);
@@ -75,6 +91,9 @@ export default function EditModuleScreen() {
         setEmoji(spec.emoji ?? '');
         setIsLive(!!spec.isLive);
         setRequired(!!spec.required);
+        setPillar((spec as any).pillar ?? 'general');
+        setStreakEnabled(Boolean((spec as any).streakEnabled));
+        setStreakCheckInTime((spec as any).streakCheckInTime ?? '');
         setPlacements(Array.isArray(spec.placements) ? spec.placements : ['day']);
 
         const config = spec.config ?? {};
@@ -83,6 +102,7 @@ export default function EditModuleScreen() {
         if (config.originDate) setOriginDate(config.originDate);
         if (config.unit) setUnit(config.unit);
         if (config.target !== undefined) setTarget(String(config.target));
+        if (config.primaryLift) setPrimaryLift(config.primaryLift);
         if (config.sourceModuleId) setSourceModuleId(config.sourceModuleId);
         if (config.prompt) setPrompt(config.prompt);
         if (config.intention) setIntention(config.intention);
@@ -90,6 +110,13 @@ export default function EditModuleScreen() {
         if (config.variant) setCountupVariant(config.variant);
         if (config.resetOnModuleId) setResetOnModuleId(config.resetOnModuleId);
         if (spec.type === 'tally' && config.step) setTarget(String(config.step));
+        // Feature 7: Load reminder config
+        if (spec.type === 'reminder') {
+          if (config.message) setReminderMessage(config.message);
+          if (config.time) setReminderTime(config.time);
+          if (Array.isArray(config.daysOfWeek)) setReminderDays(config.daysOfWeek);
+          if (config.repeat !== undefined) setReminderRepeat(config.repeat);
+        }
       } catch (err) {
         console.error('Failed to load module for editing:', err);
         Alert.alert('Error', 'Failed to load module');
@@ -129,6 +156,7 @@ export default function EditModuleScreen() {
         return {
           unit: unit || 'units',
           target: target ? Number(target) : undefined,
+          primaryLift: primaryLift.trim() || undefined,
           resetDaily: true,
           cumulativeEntry: true,
         };
@@ -165,6 +193,13 @@ export default function EditModuleScreen() {
           prompt: prompt || undefined,
           resetDaily: true,
         };
+      case 'reminder':
+        return {
+          message: reminderMessage.trim() || 'Time to check in!',
+          daysOfWeek: reminderDays,
+          time: reminderTime || '09:00',
+          repeat: reminderRepeat,
+        };
       default:
         return {};
     }
@@ -188,7 +223,31 @@ export default function EditModuleScreen() {
         placements,
         isLive,
         required,
-      });
+        pillar,
+        streakEnabled: streakEnabled ? 1 : 0,
+        streakCheckInTime: streakCheckInTime.trim() || null,
+      } as any);
+      // Sync streak notifications (Feature 8)
+      if (streakEnabled && streakCheckInTime.trim()) {
+        await scheduleStreakReminder(id, label.trim(), emoji || null, streakCheckInTime.trim());
+      } else {
+        await cancelStreakReminder(id);
+      }
+      // Feature 7: Sync reminder notifications
+      if (moduleType === 'reminder') {
+        try {
+          await scheduleModuleReminder(
+            id,
+            label.trim(),
+            emoji || null,
+            (config.time as string) ?? '09:00',
+            (config.daysOfWeek as number[]) ?? [1, 2, 3, 4, 5],
+            (config.message as string) ?? null,
+          );
+        } catch (e) {
+          console.warn('Failed to schedule reminder notification:', e);
+        }
+      }
       router.canGoBack() ? router.back() : router.replace('/(tabs)');
     } catch (err) {
       console.error('Failed to update module:', err);
@@ -332,6 +391,15 @@ export default function EditModuleScreen() {
               onChangeText={setTarget}
               keyboardType="numeric"
             />
+            <Text style={[styles.fieldLabel, { color: themeColors.text }]}>Primary Lift (for gym stats)</Text>
+            <TextInput
+              style={[styles.input, { backgroundColor: themeColors.surface, borderColor: themeColors.border, color: themeColors.text }]}
+              placeholder="e.g. Bench Press, Squat, Deadlift"
+              placeholderTextColor={themeColors.muted}
+              value={primaryLift}
+              onChangeText={setPrimaryLift}
+              autoCapitalize="words"
+            />
           </>
         )}
 
@@ -402,10 +470,84 @@ export default function EditModuleScreen() {
           </>
         )}
 
+        {moduleType === 'reminder' && (
+          <>
+            <Text style={[styles.fieldLabel, { color: themeColors.text }]}>Reminder Message</Text>
+            <TextInput
+              style={[styles.input, { backgroundColor: themeColors.surface, borderColor: themeColors.border, color: themeColors.text }]}
+              placeholder="Time to check in!"
+              placeholderTextColor={themeColors.muted}
+              value={reminderMessage}
+              onChangeText={setReminderMessage}
+            />
+            <Text style={[styles.fieldLabel, { color: themeColors.text }]}>Time (HH:MM)</Text>
+            <TextInput
+              style={[styles.input, { backgroundColor: themeColors.surface, borderColor: themeColors.border, color: themeColors.text }]}
+              placeholder="09:00"
+              placeholderTextColor={themeColors.muted}
+              value={reminderTime}
+              onChangeText={setReminderTime}
+            />
+            <Text style={[styles.fieldLabel, { color: themeColors.text }]}>Days</Text>
+            <View style={styles.variantRow}>
+              {(['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const).map((d, i) => (
+                <Pressable
+                  key={d}
+                  style={[styles.variantChip, { borderColor: themeColors.border }, reminderDays.includes(i) && { borderColor: themeColors.accent, backgroundColor: themeColors.accentLight }]}
+                  onPress={() => toggleReminderDay(i)}
+                >
+                  <Text style={[styles.variantChipText, { color: themeColors.muted }, reminderDays.includes(i) && { color: themeColors.accent }]}>
+                    {d}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+            <View style={styles.switchRow}>
+              <Text style={[styles.fieldLabel, { color: themeColors.text }]}>Repeat Weekly</Text>
+              <Switch value={reminderRepeat} onValueChange={setReminderRepeat} trackColor={{ true: themeColors.accent }} />
+            </View>
+          </>
+        )}
+
         <View style={styles.switchRow}>
           <Text style={[styles.fieldLabel, { color: themeColors.text }]}>Required</Text>
           <Switch value={required} onValueChange={setRequired} trackColor={{ true: themeColors.accent }} />
         </View>
+
+        {/* V2: Life Pillar */}
+        <Text style={[styles.fieldLabel, { color: themeColors.text }]}>Pillar</Text>
+        <View style={styles.variantRow}>
+          {(['general', 'gym', 'academic', 'life'] as const).map((p) => (
+            <Pressable
+              key={p}
+              style={[styles.variantChip, { borderColor: themeColors.border }, pillar === p && { borderColor: themeColors.accent, backgroundColor: themeColors.accentLight }]}
+              onPress={() => setPillar(p)}
+            >
+              <Text style={[styles.variantChipText, { color: themeColors.muted }, pillar === p && { color: themeColors.accent }]}>
+                {p.charAt(0).toUpperCase() + p.slice(1)}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+
+        {/* V2: Feature 8 - Streak Check-In Notification */}
+        <View style={styles.switchRow}>
+          <Text style={[styles.fieldLabel, { color: themeColors.text }]}>Streak Notifications</Text>
+          <Switch value={streakEnabled} onValueChange={setStreakEnabled} trackColor={{ true: themeColors.accent }} />
+        </View>
+        {streakEnabled && (
+          <>
+            <Text style={[styles.fieldLabel, { color: themeColors.text }]}>Daily Check-In Time (HH:MM)</Text>
+            <TextInput
+              style={[styles.input, { backgroundColor: themeColors.surface, borderColor: themeColors.border, color: themeColors.text }]}
+              placeholder="21:00"
+              placeholderTextColor={themeColors.muted}
+              value={streakCheckInTime}
+              onChangeText={setStreakCheckInTime}
+              keyboardType="numeric"
+            />
+          </>
+        )}
 
         <Pressable style={[styles.nextBtn, { backgroundColor: themeColors.accent }]} onPress={() => setStep('placements')}>
           <Text style={[styles.nextBtnText, { color: themeColors.white }]}>Next: Placements →</Text>

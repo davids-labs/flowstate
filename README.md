@@ -11,107 +11,112 @@ flowstate/
 │   └── desktop/     Vite + React + Electron
 ├── packages/
 │   └── core/        Shared logic: DB, types, timer, CSV, Firebase, analytics, narrative
-├── turbo.json       Turborepo config
-└── package.json     npm workspaces root
-```
+# FlowState
 
-## Tech Stack
+A structured daily planning & habit tracking app for mobile and desktop. Plan your days, run timed sessions, track habits and goals, and review analytics—all seamlessly synced across devices.
 
-| Layer | Tech |
-|-------|------|
-| Mobile | Expo SDK 54, React Native 0.81, expo-router 6 |
-| Desktop | Vite, React 19, Electron |
-| Database | expo-sqlite + Drizzle ORM (mobile), better-sqlite3 (desktop) |
-| State | Zustand 5 |
-| Auth/Sync | Firebase 12 (Auth + Firestore) |
-| Charts | react-native-svg (custom sparklines) |
-| Build | Turborepo, TypeScript 5.9 |
+---
+
+## Features & How to Use Them
+
+### 1. Daily Planning
+- **Create Plans:** Add day plans, must-do tasks, and routines.
+- **View Today:** See your daily checklist and modules on the Today screen.
+- **Edit Days:** Tap a day to add/edit must-dos, modules, or toggle “quiet day.”
+
+### 2. Habit & Module Tracking
+- **Module Types:**  
+	- Countdown: Track days until a target date.
+	- Countup: Track days since an origin date.
+	- Checkbox: Daily yes/no toggle.
+	- Rating: 1–5 star scale.
+	- Data Input: Numeric tracking with target.
+	- Text Note: Free-text daily capture.
+	- Progress Bar: Visual date-range progress.
+	- Streak Counter: Consecutive completion tracker.
+	- Group: Container for related modules.
+- **Create Modules:** Use the module wizard to add new habits/goals.
+- **Log Data:** Tap module cards to log/check/enter values.
+
+### 3. Timed Sessions
+- **Start Session:** Launch a session from the plan or module.
+- **Timer Screen:** Visual timer ring, block controls, haptics.
+- **Session Events:** Pause, resume, skip, or end sessions.
+
+### 4. Analytics & Review
+- **Weekly Summary:** See compliance rates, streaks, rating trends, session stats, and plan progress.
+- **Narrative Generator:** Get a natural-language summary of your week.
+- **Heatmaps:** Visualize plan completion and habit consistency.
+
+### 5. Data Management
+- **Export Data:** Export your full database as JSON (Settings > Backup & Restore > Export Backup).
+- **Import Data:** Restore your database from a backup JSON file (Settings > Backup & Restore > Import Backup).
+- **Import Plan:** Import a CSV training plan (Settings > Import Plan).
+- **Raw SQL Queries:** Run custom SQL queries for advanced inspection (Settings > Raw SQL).
+
+### 6. Sync & Cross-Device Usage
+- **Cloud Sync:** Sync data across devices using Firebase (Settings > Cloud Sync).
+- **UID Transfer:** Copy your UID to link devices manually.
+- **Manual Export/Import:** Move data between devices using backup files.
+
+### 7. Customization & Settings
+- **Dark Mode:** Toggle dark theme.
+- **Notifications:** Enable/disable reminders.
+- **Haptics:** Enable/disable vibration feedback.
+- **Advanced:** Keep screen awake, confirm before delete, compact cards.
+
+### 8. Desktop App
+- **Electron App:** All features available on desktop, with IndexedDB persistence.
+- **Backup & Restore:** Export/import full database as JSON.
+
+---
 
 ## Getting Started
 
 ### Prerequisites
-
 - Node.js 20+
 - npm 10+
-- [Expo Go](https://expo.dev/go) on your phone (for dev testing)
+- Expo Go app (for mobile dev)
 
-### Install
-
+### Install & Run
 ```bash
 git clone <repo-url> && cd flowstate
 npm install
 ```
-
-### Run Mobile (dev)
-
+**Mobile:**  
 ```bash
 cd apps/mobile
 npx expo start
 ```
-
-Scan the QR code with Expo Go or press `w` for web.
-
-### Run Desktop (dev)
-
+**Desktop:**  
 ```bash
 cd apps/desktop
-npm run dev          # Vite dev server
-# In another terminal:
-npx electron .       # Electron window
+npm run dev
+npx electron .
 ```
+
+---
 
 ## Project Structure
 
-### `packages/core`
+- `apps/mobile`: Expo React Native app
+- `apps/desktop`: Vite + React + Electron app
+- `packages/core`: Shared logic (DB, types, timer, CSV, Firebase, analytics, narrative)
 
-Shared business logic imported by both apps as `@flowstate/core`.
+---
 
-| Module | Purpose |
-|--------|---------|
-| `db/schema.ts` | Drizzle ORM table definitions (8 tables) |
-| `db/queries.ts` | Full CRUD: plans, day-plans, modules, sessions, CSV import |
-| `db/analytics.ts` | Aggregates: compliance rates, rating trends, session stats, streaks, plan progress |
-| `types/` | TypeScript types + Zod schemas for ModuleSpec, DayPlan, Session, TimerState |
-| `timer/TimerEngine.ts` | Timestamp-based timer with play/pause/resume/skip/end |
-| `csv/parser.ts` | Pure-JS RFC-4180 CSV parser (no Node.js deps) |
-| `firebase/` | Firebase Auth + Firestore sync |
-| `narrative/index.ts` | Template-based weekly summary text generator |
+## Design System
 
-### `apps/mobile`
+- Neutral palette, single accent (#2563EB)
+- System font, 7 size tokens
+- Minimalist UI, iOS polish
+- Feather icons
 
-Expo Router file-based routing:
+---
 
-| Route | Screen |
-|-------|--------|
-| `(tabs)/index` | Home — live modules, today snapshot, daily log |
-| `(tabs)/today` | Today checklist & modules |
-| `(tabs)/plan` | Plan view with progress analytics + heatmap |
-| `day/[date]` | Day detail — must-dos, modules, sessions, quiet day toggle |
-| `week/[weekId]` | Week summary — narrative, stats, compliance bars, trend charts |
-| `session/[id]` | Timer screen with SVG ring + block controls |
-| `modules/` | Module list, create wizard, detail pages |
-| `import/` | CSV import flow (pick → preview → success) |
-| `settings` | App settings — notifications, haptics, data management |
+## License
 
-### Module Types
-
-9 module types, each with its own card component:
-
-- **Countdown** — days until target date, with optional intention field
-- **Countup** — days since origin (standard or "last seen" variant)
-- **Checkbox** — daily yes/no toggle
-- **Rating** — 1–5 star scale
-- **Data Input** — numeric tracking with target
-- **Text Note** — free-text daily capture
-- **Progress Bar** — date-range visual progress
-- **Streak Counter** — consecutive completion tracker
-- **Group** — container for related modules
-
-## Analytics (Phase 6)
-
-The analytics layer (`packages/core/src/db/analytics.ts`) provides:
-
-- **Checkbox Compliance** — % of days each habit was checked
+Private — all rights reserved.
 - **Rating Trends** — averages with week-over-week trend direction
 - **Data Input Stats** — sum, average, days on target
 - **Session Completion** — completed/abandoned/pending with daily breakdown

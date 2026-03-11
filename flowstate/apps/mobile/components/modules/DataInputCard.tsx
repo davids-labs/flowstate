@@ -55,7 +55,7 @@ export function DataInputCard({
           keyboardType="numeric"
           value={value > 0 ? String(value) : ''}
           onChangeText={text => {
-            const num = parseInt(text, 10);
+            const num = parseFloat(text);
             onChangeValue(isNaN(num) ? 0 : num);
           }}
           placeholder="0"

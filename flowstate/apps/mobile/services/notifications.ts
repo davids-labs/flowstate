@@ -148,12 +148,18 @@ try {
 /**
  * Start the background timer task.
  * Requests permissions and shows an initial notification.
+ *
+ * BUG-15: Only call for timed countdown blocks. For countup / goal_based
+ * blocks (where remaining is 0, negative, or Infinity), this is a no-op.
  */
 export async function startBackgroundTimer(
   remaining: number,
   blockName: string,
   routineName: string,
 ) {
+  // Guard: don't schedule background countdown for open-ended blocks
+  if (!isFinite(remaining) || remaining <= 0) return;
+
   const hasPermission = await requestNotificationPermissions();
   if (!hasPermission) {
     console.warn('Notification permissions not granted');
@@ -338,6 +344,88 @@ export async function syncAllModuleReminders(
       await scheduleModuleReminder(r.id, r.moduleLabel, r.moduleEmoji, r.time, r.daysOfWeek, r.message);
     } else {
       await cancelModuleReminder(r.id);
+    }
+  }
+}
+
+// ─── Streak Check-In Notifications (Feature 8) ─────────────────
+
+const STREAK_REMINDER_PREFIX = 'flowstate-streak-';
+
+/**
+ * Schedule a daily streak check-in notification for a module.
+ * Fires every day at the configured time to warn the user to log
+ * before their streak resets at midnight.
+ *
+ * @param moduleId     - unique module id (used as notification key)
+ * @param moduleLabel  - display label e.g. "Push-ups"
+ * @param moduleEmoji  - optional emoji prefix
+ * @param checkInTime  - "HH:MM" string from moduleSpecs.streakCheckInTime
+ */
+export async function scheduleStreakReminder(
+  moduleId: string,
+  moduleLabel: string,
+  moduleEmoji: string | null,
+  checkInTime: string,
+): Promise<void> {
+  const enabled = await areNotificationsEnabled();
+  if (!enabled) return;
+  const hasPermission = await requestNotificationPermissions();
+  if (!hasPermission) return;
+
+  await cancelStreakReminder(moduleId);
+
+  const [hourStr, minStr] = checkInTime.split(':');
+  const hour = parseInt(hourStr, 10);
+  const minute = parseInt(minStr, 10);
+  if (isNaN(hour) || isNaN(minute)) return;
+
+  const prefix = moduleEmoji ? `${moduleEmoji} ` : '🔥 ';
+  await Notifications.scheduleNotificationAsync({
+    identifier: `${STREAK_REMINDER_PREFIX}${moduleId}`,
+    content: {
+      title: `${prefix}Streak reminder — ${moduleLabel}`,
+      body: `Log ${moduleLabel} today to keep your streak going!`,
+      sound: true,
+      priority: Notifications.AndroidNotificationPriority.HIGH,
+    },
+    trigger: {
+      type: Notifications.SchedulableTriggerInputTypes.DAILY,
+      hour,
+      minute,
+    },
+  });
+}
+
+/**
+ * Cancel the streak reminder for a specific module.
+ */
+export async function cancelStreakReminder(moduleId: string): Promise<void> {
+  try {
+    await Notifications.cancelScheduledNotificationAsync(`${STREAK_REMINDER_PREFIX}${moduleId}`);
+  } catch {}
+}
+
+/**
+ * Sync all streak reminders from module specs.
+ * Call this on app start and when a module is updated.
+ */
+export async function syncAllStreakReminders(
+  modules: Array<{
+    id: string;
+    label: string;
+    emoji: string | null;
+    streakEnabled: number | boolean;
+    streakCheckInTime: string | null;
+  }>,
+): Promise<void> {
+  for (const m of modules) {
+    const enabled = Boolean(m.streakEnabled);
+    const time = m.streakCheckInTime;
+    if (enabled && time) {
+      await scheduleStreakReminder(m.id, m.label, m.emoji, time);
+    } else {
+      await cancelStreakReminder(m.id);
     }
   }
 }

@@ -27,6 +27,7 @@ import {
 } from '@flowstate/core';
 import { sql } from 'drizzle-orm';
 import { useSyncContext } from '../components/SyncProvider';
+import { useAppUpdates } from '../components/UpdatesProvider';
 import { useTheme } from '../constants/ThemeContext';
 import { fontSize, spacing, borderRadius } from '../constants/theme';
 
@@ -36,14 +37,25 @@ interface SettingRowProps {
   subtitle?: string;
   onPress?: () => void;
   right?: React.ReactNode;
+  /** Show a coloured notification dot on the icon */
+  dot?: 'accent' | 'success' | 'warning' | 'danger';
 }
 
-function SettingRow({ icon, label, subtitle, onPress, right }: SettingRowProps) {
+function SettingRow({ icon, label, subtitle, onPress, right, dot }: SettingRowProps) {
   const { themeColors } = useTheme();
+  const dotColor = dot === 'success' ? themeColors.success
+    : dot === 'warning' ? themeColors.warning
+    : dot === 'danger' ? themeColors.danger
+    : themeColors.accent;
   return (
     <Pressable style={[styles.row, { backgroundColor: themeColors.surface }]} onPress={onPress} disabled={!onPress && !right}>
-      <View style={[styles.rowIcon, { backgroundColor: themeColors.accentLight }]}>
-        <Feather name={icon as any} size={20} color={themeColors.accent} />
+      <View style={{ position: 'relative' }}>
+        <View style={[styles.rowIcon, { backgroundColor: themeColors.accentLight }]}>
+          <Feather name={icon as any} size={20} color={themeColors.accent} />
+        </View>
+        {dot && (
+          <View style={[styles.rowDot, { backgroundColor: dotColor, borderColor: themeColors.surface }]} />
+        )}
       </View>
       <View style={styles.rowInfo}>
         <Text style={[styles.rowLabel, { color: themeColors.text }]}>{label}</Text>
@@ -64,6 +76,7 @@ export default function SettingsScreen() {
   const { isAuthenticated, isSyncing, uid, pendingCount } = useSyncContext();
   const { isDark, themeColors, toggleDarkMode: setDarkModeTheme } = useTheme();
 
+  const { checkNow: checkForUpdates, applyNow: applyUpdate, isChecking: isCheckingUpdates, updateReady } = useAppUpdates();
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [hapticsEnabled, setHapticsEnabled] = useState(true);
   const [showDevPanel, setShowDevPanel] = useState(false);
@@ -319,9 +332,15 @@ export default function SettingsScreen() {
         right={isLinking ? <ActivityIndicator size="small" color={themeColors.accent} /> : undefined}
       />
 
+      <Text style={[styles.sectionLabel, { color: themeColors.muted }]}>Progress & Stats</Text>
+      <SettingRow icon="activity" label="Gym Stats" subtitle="Volume, PRs, and frequency" onPress={() => router.push('/stats/gym')} />
+      <SettingRow icon="book-open" label="Academic Stats" subtitle="Study time and grades" onPress={() => router.push('/stats/academic')} />
+      <SettingRow icon="heart" label="Life Stats" subtitle="Streaks, habits, and wellness" onPress={() => router.push('/stats/life')} />
+
       <Text style={[styles.sectionLabel, { color: themeColors.muted }]}>Modules</Text>
       <SettingRow icon="grid" label="Manage Modules" subtitle="View, archive, and reorder modules" onPress={() => router.push('/modules')} />
       <SettingRow icon="list" label="Manage Routines" subtitle="Create and edit timed routines" onPress={() => router.push('/routines')} />
+      <SettingRow icon="file-text" label="CSV Plans" subtitle="Manage imported training plans" onPress={() => router.push('/settings/csv-plans')} />
 
       <Text style={[styles.sectionLabel, { color: themeColors.muted }]}>Advanced</Text>
       <SettingRow
@@ -343,8 +362,20 @@ export default function SettingsScreen() {
 
       <Text style={[styles.sectionLabel, { color: themeColors.muted }]}>About</Text>
       <SettingRow icon="info" label="Version" subtitle="1.0.0 (tap 5× for dev tools)" onPress={handleVersionTap} />
+      <SettingRow
+        icon="download-cloud"
+        label={updateReady ? 'Update ready — tap to restart' : 'Check for Updates'}
+        subtitle={
+          updateReady ? 'A new version is downloaded and waiting.'
+          : isCheckingUpdates ? 'Checking…'
+          : 'Download the latest OTA update'
+        }
+        onPress={isCheckingUpdates ? undefined : updateReady ? () => applyUpdate() : () => checkForUpdates()}
+        right={isCheckingUpdates ? <ActivityIndicator size="small" color={themeColors.accent} /> : undefined}
+        dot={updateReady ? 'success' : undefined}
+      />
       <SettingRow icon="database" label="Storage" subtitle={`SQLite • Platform: ${Platform.OS}`} />
-      <SettingRow icon="cpu" label="App Info" subtitle={`Schema v4 • ${isAuthenticated ? 'Synced' : 'Local only'}`} />
+      <SettingRow icon="cpu" label="App Info" subtitle={`Schema v10 • ${isAuthenticated ? 'Synced' : 'Local only'}`} />
 
       {showDevPanel && (
         <>
@@ -487,6 +518,7 @@ const styles = StyleSheet.create({
   },
   row: { flexDirection: 'row', alignItems: 'center', borderRadius: borderRadius.md, padding: spacing.md, marginBottom: spacing.sm },
   rowIcon: { width: 36, height: 36, borderRadius: borderRadius.sm, alignItems: 'center', justifyContent: 'center', marginRight: spacing.md },
+  rowDot: { position: 'absolute', top: -2, right: spacing.sm, width: 10, height: 10, borderRadius: 5, borderWidth: 2 },
   rowInfo: { flex: 1 },
   rowLabel: { fontSize: fontSize.md, fontWeight: '600' },
   rowSubtitle: { fontSize: fontSize.sm, marginTop: 2 },
