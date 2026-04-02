@@ -11,7 +11,6 @@
 import React, { useEffect, useRef } from 'react';
 import {
   View,
-  Text,
   Pressable,
   StyleSheet,
   Animated,
@@ -20,21 +19,17 @@ import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import Svg, { Circle } from 'react-native-svg';
 import { useRouter } from 'expo-router';
-import { fontSize, spacing, borderRadius } from '../../constants/theme';
+import { spacing, borderRadius } from '../../constants/theme';
 import { useTheme } from '../../constants/ThemeContext';
 import { useTimerStore } from '../../stores/timerStore';
+import { useUserPrefsStore, type Pillar } from '../../stores/userPrefsStore';
+import { AppText } from '../primitives/Text';
 
 const RING_SIZE = 140;
 const STROKE_WIDTH = 6;
 const RADIUS = (RING_SIZE - STROKE_WIDTH) / 2;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
-const PILLAR_COLORS: Record<string, string> = {
-  gym: '#ef4444',
-  academic: '#3b82f6',
-  life: '#22c55e',
-  general: '#a855f7',
-};
 
 interface Props {
   pillar?: 'gym' | 'academic' | 'life' | 'general';
@@ -46,6 +41,8 @@ interface Props {
     scheduledTime?: string;
     pillar?: string;
   } | null;
+  emptyActionLabel?: string;
+  onEmptyActionPress?: () => void;
 }
 
 function formatTime(ms: number): string {
@@ -58,9 +55,16 @@ function formatTime(ms: number): string {
   return `${prefix}${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
-export function ActiveBlockWidget({ pillar = 'general', instructions, nextSession }: Props) {
-  const { themeColors } = useTheme();
+export function ActiveBlockWidget({
+  pillar = 'general',
+  instructions,
+  nextSession,
+  emptyActionLabel = 'Add Session',
+  onEmptyActionPress,
+}: Props) {
+  const { themeTokens } = useTheme();
   const router = useRouter();
+  const getPillarColour = useUserPrefsStore(s => s.getPillarColour);
 
   const phase = useTimerStore((s) => s.phase);
   const blockIndex = useTimerStore((s) => s.blockIndex);
@@ -68,16 +72,21 @@ export function ActiveBlockWidget({ pillar = 'general', instructions, nextSessio
   const currentBlockName = useTimerStore((s) => s.currentBlockName);
   const sessionId = useTimerStore((s) => s.sessionId);
   const routineName = useTimerStore((s) => s.routineName);
-  const remaining = useTimerStore((s) => s._engine?.remaining ?? 0);
-  const progress = useTimerStore((s) => s._engine?.progress ?? 0);
-  const isOverdue = useTimerStore((s) => s._engine?.isOverdue ?? false);
+  const elapsed = useTimerStore((s) => s.elapsed);
+  const blockDurationMs = useTimerStore((s) => s.blockDurationMs);
+  const blockMode = useTimerStore((s) => s.blockMode);
   const pause = useTimerStore((s) => s.pause);
   const resume = useTimerStore((s) => s.resume);
   const skip = useTimerStore((s) => s.skip);
   const end = useTimerStore((s) => s.end);
 
   const isActive = phase === 'running' || phase === 'overdue' || phase === 'paused' || phase === 'pending_condition';
-  const accentColor = PILLAR_COLORS[pillar] ?? themeColors.accent;
+  const accentColor = getPillarColour(pillar as Pillar);
+
+  // Derive display values from stable Zustand primitives — never read Date.now() inside a selector
+  const isOverdue = phase === 'overdue';
+  const remaining = blockDurationMs > 0 ? blockDurationMs - elapsed : -elapsed;
+  const progress = blockMode !== 'timed' ? 0 : (blockDurationMs > 0 ? Math.min(elapsed / blockDurationMs, 1) : 0);
 
   // Pulse animation  
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -98,33 +107,42 @@ export function ActiveBlockWidget({ pillar = 'general', instructions, nextSessio
 
   // ─── No active session ───────────────────────────────────────
   if (!isActive) {
+    const nextPillarColor = nextSession?.pillar
+      ? getPillarColour(nextSession.pillar as Pillar)
+      : themeTokens.accent;
     return (
-      <View style={[styles.promptCard, { backgroundColor: themeColors.surface }]}>
+      <View style={[styles.promptCard, { backgroundColor: themeTokens.surface }]}>
         <View style={styles.promptLeft}>
-          <Text style={[styles.promptTitle, { color: themeColors.text }]}>
+          <AppText variant="headline" style={styles.promptTitle}>
             {nextSession ? nextSession.routineName : 'No Session Planned'}
-          </Text>
-          <Text style={[styles.promptMeta, { color: themeColors.muted }]}>
+          </AppText>
+          <AppText variant="footnote" color={themeTokens.textSecondary} style={styles.promptMeta}>
             {nextSession?.scheduledTime ?? 'Tap to start an ad-hoc session'}
-          </Text>
+          </AppText>
         </View>
         {nextSession ? (
           <Pressable
-            style={[styles.promptStartBtn, { backgroundColor: PILLAR_COLORS[nextSession.pillar ?? 'general'] }]}
+            style={[styles.promptStartBtn, { backgroundColor: nextPillarColor }]}
             onPress={() => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
               router.push(`/session/${nextSession.sessionId}`);
             }}
           >
             <Feather name="play" size={18} color="#fff" />
-            <Text style={styles.promptStartText}>Start</Text>
+            <AppText variant="footnote" onAccent style={styles.promptStartText}>Start</AppText>
           </Pressable>
         ) : (
           <Pressable
-            style={[styles.promptStartBtn, { backgroundColor: themeColors.accent }]}
-            onPress={() => router.push('/(tabs)/today')}
+            style={[styles.promptStartBtn, { backgroundColor: themeTokens.accent }]}
+            onPress={() => {
+              if (onEmptyActionPress) {
+                onEmptyActionPress();
+                return;
+              }
+              router.push('/(tabs)/today');
+            }}
           >
-            <Text style={styles.promptStartText}>Today →</Text>
+            <AppText variant="footnote" onAccent style={styles.promptStartText}>{emptyActionLabel}</AppText>
           </Pressable>
         )}
       </View>
@@ -134,10 +152,10 @@ export function ActiveBlockWidget({ pillar = 'general', instructions, nextSessio
   // ─── Active session ───────────────────────────────────────────
   const timerProgress = Math.min(progress, 1);
   const strokeDashoffset = CIRCUMFERENCE * (1 - timerProgress);
-  const ringColor = isOverdue ? themeColors.danger : accentColor;
+  const ringColor = isOverdue ? themeTokens.destructive : accentColor;
 
   return (
-    <View style={[styles.activeCard, { backgroundColor: themeColors.surface }]}>
+    <View style={[styles.activeCard, { backgroundColor: themeTokens.surface }]}>
       {/* Pillar accent strip */}
       <View style={[styles.pillarStrip, { backgroundColor: accentColor }]} />
 
@@ -146,7 +164,7 @@ export function ActiveBlockWidget({ pillar = 'general', instructions, nextSessio
         <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
           <Svg width={RING_SIZE} height={RING_SIZE}>
             <Circle cx={RING_SIZE / 2} cy={RING_SIZE / 2} r={RADIUS}
-              stroke={themeColors.surfaceBorder} strokeWidth={STROKE_WIDTH} fill="none" />
+              stroke={themeTokens.border} strokeWidth={STROKE_WIDTH} fill="none" />
             <Circle cx={RING_SIZE / 2} cy={RING_SIZE / 2} r={RADIUS}
               stroke={ringColor} strokeWidth={STROKE_WIDTH} fill="none"
               strokeDasharray={CIRCUMFERENCE} strokeDashoffset={strokeDashoffset}
@@ -154,33 +172,37 @@ export function ActiveBlockWidget({ pillar = 'general', instructions, nextSessio
               transform={`rotate(-90 ${RING_SIZE / 2} ${RING_SIZE / 2})`} />
           </Svg>
           <View style={styles.timeOverlay}>
-            <Text style={[styles.timeText, { color: isOverdue ? themeColors.danger : themeColors.text }]}>
+            <AppText
+              variant="title2"
+              color={isOverdue ? themeTokens.destructive : themeTokens.textPrimary}
+              style={styles.timeText}
+            >
               {formatTime(remaining)}
-            </Text>
-            <Text style={[styles.blockProgress, { color: themeColors.muted }]}>
+            </AppText>
+            <AppText variant="caption2" color={themeTokens.textSecondary} style={styles.blockProgress}>
               {blockIndex + 1}/{totalBlocks}
-            </Text>
+            </AppText>
           </View>
         </Animated.View>
 
         {/* Block info */}
         <View style={styles.blockInfo}>
-          <Text style={[styles.routineNameText, { color: themeColors.muted }]} numberOfLines={1}>
+          <AppText variant="caption1" color={themeTokens.textSecondary} numberOfLines={1} style={styles.routineNameText}>
             {routineName}
-          </Text>
-          <Text style={[styles.blockNameText, { color: themeColors.text }]} numberOfLines={2}>
+          </AppText>
+          <AppText variant="headline" numberOfLines={2} style={styles.blockNameText}>
             {currentBlockName}
-          </Text>
+          </AppText>
           {!!instructions && (
-            <Text style={[styles.instructionText, { color: themeColors.muted }]} numberOfLines={1}>
+            <AppText variant="caption1" color={themeTokens.textSecondary} numberOfLines={1} style={styles.instructionText}>
               {instructions}
-            </Text>
+            </AppText>
           )}
 
           {/* Controls */}
           <View style={styles.controls}>
             <Pressable
-              style={[styles.controlBtn, { backgroundColor: themeColors.background }]}
+              style={[styles.controlBtn, { backgroundColor: themeTokens.background }]}
               onPress={() => {
                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                 phase === 'running' ? pause() : resume();
@@ -189,20 +211,20 @@ export function ActiveBlockWidget({ pillar = 'general', instructions, nextSessio
               <Feather
                 name={phase === 'running' ? 'pause' : 'play'}
                 size={16}
-                color={themeColors.text}
+                color={themeTokens.textPrimary}
               />
             </Pressable>
             <Pressable
-              style={[styles.controlBtn, { backgroundColor: themeColors.background }]}
+              style={[styles.controlBtn, { backgroundColor: themeTokens.background }]}
               onPress={() => {
                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                 skip();
               }}
             >
-              <Feather name="skip-forward" size={16} color={themeColors.text} />
+              <Feather name="skip-forward" size={16} color={themeTokens.textPrimary} />
             </Pressable>
             <Pressable
-              style={[styles.controlBtn, { backgroundColor: themeColors.danger + '20' }]}
+              style={[styles.controlBtn, { backgroundColor: themeTokens.destructive + '20' }]}
               onPress={() => {
                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
                 if (sessionId) {
@@ -210,14 +232,14 @@ export function ActiveBlockWidget({ pillar = 'general', instructions, nextSessio
                 }
               }}
             >
-              <Feather name="maximize-2" size={16} color={themeColors.danger} />
+              <Feather name="maximize-2" size={16} color={themeTokens.destructive} />
             </Pressable>
           </View>
         </View>
       </View>
 
       {/* Session progress bar */}
-      <View style={[styles.progressTrack, { backgroundColor: themeColors.surfaceBorder }]}>
+      <View style={[styles.progressTrack, { backgroundColor: themeTokens.border }]}>
         <View
           style={[
             styles.progressFill,
@@ -243,11 +265,9 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   promptTitle: {
-    fontSize: fontSize.md,
     fontWeight: '700',
   },
   promptMeta: {
-    fontSize: fontSize.sm,
     marginTop: 2,
   },
   promptStartBtn: {
@@ -259,9 +279,7 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.lg,
   },
   promptStartText: {
-    color: '#fff',
     fontWeight: '700',
-    fontSize: fontSize.sm,
   },
 
   // ─── Active session state ────────────────────────────────────
@@ -290,12 +308,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   timeText: {
-    fontSize: 22,
-    fontWeight: '700',
     fontVariant: ['tabular-nums'],
   },
   blockProgress: {
-    fontSize: 10,
     marginTop: 2,
   },
   blockInfo: {
@@ -303,19 +318,13 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   routineNameText: {
-    fontSize: fontSize.xs,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
   blockNameText: {
-    fontSize: fontSize.lg,
     fontWeight: '700',
-    lineHeight: 22,
   },
-  instructionText: {
-    fontSize: fontSize.xs,
-    lineHeight: 16,
-  },
+  instructionText: {},
   controls: {
     flexDirection: 'row',
     gap: spacing.xs,

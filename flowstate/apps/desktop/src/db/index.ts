@@ -218,6 +218,73 @@ function ensureTables(db: Database) {
     updated_at TEXT NOT NULL DEFAULT ''
   )`);
 
+  db.run(`CREATE TABLE IF NOT EXISTS trackers (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    label TEXT NOT NULL,
+    emoji TEXT,
+    config TEXT NOT NULL DEFAULT '{}',
+    collection_id TEXT REFERENCES collections(id),
+    pin_rules TEXT NOT NULL DEFAULT '{}',
+    metadata TEXT NOT NULL DEFAULT '{}',
+    archived_at TEXT,
+    created_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT ''
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS tracker_entries (
+    id TEXT PRIMARY KEY,
+    tracker_id TEXT NOT NULL REFERENCES trackers(id),
+    date TEXT NOT NULL,
+    value_json TEXT NOT NULL,
+    numeric_value REAL,
+    boolean_value INTEGER,
+    text_value TEXT,
+    media_count INTEGER NOT NULL DEFAULT 0,
+    logged_at TEXT NOT NULL,
+    session_id TEXT
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS tracker_schedules (
+    id TEXT PRIMARY KEY,
+    tracker_id TEXT NOT NULL REFERENCES trackers(id),
+    days_of_week TEXT NOT NULL DEFAULT '[]',
+    time_of_day TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT ''
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS tracker_reminders (
+    id TEXT PRIMARY KEY,
+    tracker_id TEXT NOT NULL REFERENCES trackers(id),
+    days_of_week TEXT NOT NULL DEFAULT '[]',
+    time TEXT NOT NULL,
+    message TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT ''
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS tracker_layouts (
+    id TEXT PRIMARY KEY,
+    tracker_id TEXT NOT NULL REFERENCES trackers(id),
+    surface TEXT NOT NULL,
+    zone TEXT,
+    "order" INTEGER NOT NULL DEFAULT 0,
+    size TEXT NOT NULL DEFAULT 'compact'
+  )`);
+
+  db.run(`CREATE INDEX IF NOT EXISTS idx_trackers_collection ON trackers(collection_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_trackers_kind ON trackers(kind)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_tracker_entries_tracker_date ON tracker_entries(tracker_id, date)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_tracker_entries_numeric ON tracker_entries(tracker_id, numeric_value)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_tracker_entries_boolean ON tracker_entries(tracker_id, boolean_value)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_tracker_entries_logged_at ON tracker_entries(logged_at)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_tracker_schedules_tracker ON tracker_schedules(tracker_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_tracker_reminders_tracker ON tracker_reminders(tracker_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_tracker_layouts_surface ON tracker_layouts(surface, "order")`);
+
   // ─── Version-based column additions ─────────────────────
   // These use ALTER TABLE which will fail if column already exists,
   // so we wrap each in a try/catch.

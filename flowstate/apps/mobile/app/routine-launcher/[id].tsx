@@ -1,22 +1,42 @@
+/**
+ * Routine Launcher — V2 spec §3
+ *
+ * Immersive full-bleed canvas. Layout:
+ *   • Session progress bar (absolute top, 4pt, pillarX)
+ *   • Centre canvas: routine name · block name · timer ring (220pt) · block chips
+ *   • Fixed control bar: Pause · Skip · End
+ *   • Bottom drawer: todos · instructions · notes (animated, draggable)
+ *
+ * Business logic is preserved from V1:
+ *   Feature 1 – Block condition locks
+ *   Feature 2 – Count-up / goal-based timers
+ *   Feature 3 – Variable block sets
+ *   Feature 4 – Block todo checklists
+ *   Feature 5 – Per-block instructions
+ *   Feature 6 – countup_list → countup-session redirect
+ */
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View,
-  Text,
   Pressable,
   StyleSheet,
   Alert,
   ScrollView,
-  ActivityIndicator,
   Animated,
   TextInput,
+  KeyboardAvoidingView,
+  Platform,
+  useWindowDimensions,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useKeepAwake } from 'expo-keep-awake';
 import Svg, { Circle } from 'react-native-svg';
-import { fontSize, spacing, borderRadius } from '../../constants/theme';
+import { space, radius, typography } from '../../constants/theme';
 import { useTheme } from '../../constants/ThemeContext';
+import { AppText } from '../../components/primitives/Text';
 import { useDatabaseSafe } from '../../components/DatabaseProvider';
 import {
   getModuleSpec,
@@ -34,68 +54,165 @@ import {
   getSessionBlockInstructions,
 } from '@flowstate/core';
 import { useTimerStore } from '../../stores/timerStore';
+import { useUserPrefsStore, type Pillar } from '../../stores/userPrefsStore';
 
-const RING_SIZE = 200;
-const STROKE_WIDTH = 8;
+// ─── Ring constants ───────────────────────────────────────────────────────────
+const RING_SIZE = 220;
+const STROKE_WIDTH = 10;
 const RADIUS = (RING_SIZE - STROKE_WIDTH) / 2;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
-// ─── Block types ────────────────────────────────────────────────
+// ─── Drawer constants ─────────────────────────────────────────────────────────
+const DRAWER_PEEK = 72;    // collapsed height: handle bar + icon row
+const DRAWER_FULL = 0.62;  // fraction of screen height when expanded
 
-interface TodoItem {
-  id: string;
-  text: string;
-}
-
+// ─── Block types ──────────────────────────────────────────────────────────────
+interface TodoItem { id: string; text: string; }
 interface BlockCondition {
   type: 'module_checked' | 'count_reached' | 'min_time' | 'manual_only' | 'all_todos_checked';
-  value?: number; // used for count_reached / min_time
+  value?: number;
 }
-
 interface Block {
-  name: string;
-  durationMinutes: number;
-  type: string;
+  name: string; durationMinutes: number; type: string;
   blockMode: 'timed' | 'goal_based' | 'countup';
-  goalTarget: number | null;
-  todos: TodoItem[];
-  condition: BlockCondition | null;
-  liftTag: string;
+  goalTarget: number | null; todos: TodoItem[];
+  condition: BlockCondition | null; liftTag: string;
 }
 
 function formatTime(ms: number): string {
-  const isNegative = ms < 0;
-  const absMs = Math.abs(ms);
-  const totalSeconds = Math.floor(absMs / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  const prefix = isNegative ? '+' : '';
-  return `${prefix}${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  const isNeg = ms < 0;
+  const abs = Math.abs(ms);
+  const s = Math.floor(abs / 1000);
+  const m = Math.floor(s / 60);
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  const ss = s % 60;
+  const prefix = isNeg ? '+' : '';
+  if (h > 0) return `${prefix}${h}:${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
+  return `${prefix}${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
 }
 
-const TYPE_LABELS: Record<string, string> = {
-  focus: 'Focus',
-  break: 'Break',
-  warmup: 'Warm Up',
-  cooldown: 'Cool Down',
-  custom: 'Custom',
+const TYPE_LABEL: Record<string, string> = {
+  focus: 'Focus', break: 'Break', warmup: 'Warm Up', cooldown: 'Cool Down', custom: 'Custom',
 };
 
+// ─── BottomDrawer ─────────────────────────────────────────────────────────────
+interface DrawerProps {
+  isOpen: boolean; onToggle: () => void;
+  todos: TodoItem[]; todoChecked: Record<string, boolean>;
+  onToggleTodo: (id: string) => void;
+  instructions: string;
+  sessionNotes: string; onNotesChange: (t: string) => void;
+  isGym: boolean;
+  screenHeight: number;
+  pillarColor: string;
+}
+
+function BottomDrawer({ isOpen, onToggle, todos, todoChecked, onToggleTodo, instructions, sessionNotes, onNotesChange, isGym, screenHeight, pillarColor }: DrawerProps) {
+  const { themeTokens } = useTheme();
+  const heightAnim = useRef(new Animated.Value(DRAWER_PEEK)).current;
+  const pendoCount = todos.filter(t => !todoChecked[t.id]).length;
+  const drawerMax = screenHeight * DRAWER_FULL;
+
+  useEffect(() => {
+    Animated.spring(heightAnim, {
+      toValue: isOpen ? drawerMax : DRAWER_PEEK,
+      damping: 26, stiffness: 400, useNativeDriver: false,
+    }).start();
+  }, [isOpen, drawerMax]);
+
+  return (
+    <Animated.View style={[S.drawer, { height: heightAnim, backgroundColor: themeTokens.surfaceElevated, borderTopColor: themeTokens.border }]}>
+      {/* Handle */}
+      <Pressable style={S.drawerHandle} onPress={onToggle} hitSlop={16}>
+        <View style={[S.handleBar, { backgroundColor: themeTokens.textTertiary }]} />
+      </Pressable>
+
+      {/* Icon row (always visible) */}
+      <View style={S.iconRow}>
+        <Pressable style={S.iconBtn} onPress={onToggle}>
+          <View style={{ position: 'relative' }}>
+            <Feather name="check-square" size={20} color={pendoCount > 0 ? pillarColor : themeTokens.textSecondary} />
+            {pendoCount > 0 && (
+              <View style={[S.iconBadge, { backgroundColor: pillarColor }]}>
+                <AppText variant="caption2" onAccent>{pendoCount}</AppText>
+              </View>
+            )}
+          </View>
+        </Pressable>
+        <Pressable style={S.iconBtn} onPress={onToggle}>
+          <Feather name="file-text" size={20} color={instructions ? pillarColor : themeTokens.textSecondary} />
+        </Pressable>
+        {isGym && (
+          <Pressable style={S.iconBtn} onPress={onToggle}>
+            <Feather name="tool" size={20} color={themeTokens.textSecondary} />
+          </Pressable>
+        )}
+        <Pressable style={S.iconBtn} onPress={onToggle}>
+          <Feather name="tag" size={20} color={themeTokens.textSecondary} />
+        </Pressable>
+        <Pressable style={S.iconBtn} onPress={onToggle}>
+          <Feather name="clock" size={20} color={themeTokens.textSecondary} />
+        </Pressable>
+      </View>
+
+      {/* Expanded content */}
+      {isOpen && (
+        <ScrollView style={S.drawerScroll} contentContainerStyle={S.drawerContent} keyboardShouldPersistTaps="handled">
+          {/* Todos */}
+          {todos.length > 0 && (
+            <View style={S.drawerSection}>
+              <AppText variant="caption1" color={themeTokens.textTertiary} style={S.drawerSectionLabel}>CHECKLIST</AppText>
+              {todos.map(todo => {
+                const checked = todoChecked[todo.id] ?? false;
+                return (
+                  <Pressable key={todo.id} style={S.todoRow} onPress={() => onToggleTodo(todo.id)}>
+                    <View style={[S.todoCircle, { borderColor: checked ? pillarColor : themeTokens.borderStrong, backgroundColor: checked ? pillarColor : 'transparent' }]}>
+                      {checked && <Feather name="check" size={11} color="#fff" />}
+                    </View>
+                    <AppText variant="body" color={checked ? themeTokens.textTertiary : themeTokens.textPrimary} style={checked ? S.strikethrough : undefined}>{todo.text}</AppText>
+                  </Pressable>
+                );
+              })}
+            </View>
+          )}
+
+          {/* Instructions */}
+          {!!instructions && (
+            <View style={S.drawerSection}>
+              <AppText variant="caption1" color={themeTokens.textTertiary} style={S.drawerSectionLabel}>INSTRUCTIONS</AppText>
+              <AppText variant="body" color={themeTokens.textSecondary}>{instructions}</AppText>
+            </View>
+          )}
+
+          {/* Notes */}
+          <View style={S.drawerSection}>
+            <AppText variant="caption1" color={themeTokens.textTertiary} style={S.drawerSectionLabel}>SESSION NOTES</AppText>
+            <TextInput
+              style={[S.notesInput, { color: themeTokens.textPrimary, borderColor: themeTokens.border, backgroundColor: themeTokens.surfaceInput }]}
+              placeholder="Add notes..."
+              placeholderTextColor={themeTokens.textPlaceholder}
+              multiline
+              value={sessionNotes}
+              onChangeText={onNotesChange}
+              textAlignVertical="top"
+            />
+          </View>
+        </ScrollView>
+      )}
+    </Animated.View>
+  );
+}
+
+// ─── Main screen ──────────────────────────────────────────────────────────────
 export default function RoutineLauncherScreen() {
   useKeepAwake();
-
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { themeColors } = useTheme();
+  const { themeTokens } = useTheme();
   const { db, isReady } = useDatabaseSafe();
-
-  const TYPE_COLORS: Record<string, string> = {
-    focus: themeColors.accent,
-    break: themeColors.success,
-    warmup: '#F59E0B',
-    cooldown: '#8B5CF6',
-    custom: themeColors.muted,
-  };
+  const insets = useSafeAreaInsets();
+  const getPillarColour = useUserPrefsStore(s => s.getPillarColour);
 
   const [loading, setLoading] = useState(true);
   const [moduleLabel, setModuleLabel] = useState('');
@@ -107,32 +224,37 @@ export default function RoutineLauncherScreen() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [started, setStarted] = useState(false);
   const [autoStart, setAutoStart] = useState(false);
+  const [routinePillar, setRoutinePillar] = useState<string>('general'); // V2: track pillar for ring colour
 
-  // Feature 4: per-block todo checked state { [blockIndex]: { [todoId]: boolean } }
+  // Feature 4: per-block todo state
   const [todoChecked, setTodoChecked] = useState<Record<number, Record<string, boolean>>>({});
-  // Feature 5: per-block instructions { [blockIndex]: string }
+  // Feature 5: per-block instructions
   const [blockInstructions, setBlockInstructions] = useState<Record<number, string>>({});
-  // Feature 2: count-up timer for goal-based / countup blocks
+  // Feature 2: count-up
   const [countupMs, setCountupMs] = useState(0);
   const countupRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const countupStartRef = useRef<number>(0);
-  // Feature 2: goal count progress
+  // Feature 2: goal count
   const [goalCount, setGoalCount] = useState(0);
-  // V2: Feature 3 - Variable Block Sets
+  // Feature 3: block sets
   const [blockSets, setBlockSets] = useState<Array<{ id: string; name: string; isDefault: number }>>([]);
   const [selectedSetId, setSelectedSetId] = useState<string | null>(null);
   const [setPickerVisible, setSetPickerVisible] = useState(false);
-  // Store routineId so set-picker can re-query blocks
   const [launcherRoutineId, setLauncherRoutineId] = useState<string | null>(null);
+  // Drawer
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [sessionNotes, setSessionNotes] = useState('');
+  // Screen dimensions for drawer height calc
+  const { height: screenHeight } = useWindowDimensions();
 
-  // Pulse animation for active block
+  // Pulse animation
   const pulseAnim = useRef(new Animated.Value(1)).current;
   useEffect(() => {
     if (started) {
       const loop = Animated.loop(
         Animated.sequence([
-          Animated.timing(pulseAnim, { toValue: 1.05, duration: 1000, useNativeDriver: true }),
-          Animated.timing(pulseAnim, { toValue: 1, duration: 1000, useNativeDriver: true }),
+          Animated.timing(pulseAnim, { toValue: 1.06, duration: 800, useNativeDriver: true }),
+          Animated.timing(pulseAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
         ]),
       );
       loop.start();
@@ -140,104 +262,76 @@ export default function RoutineLauncherScreen() {
     }
   }, [started]);
 
-  // Timer state (select primitives individually to keep selectors stable)
-  const phase = useTimerStore((s) => s.phase);
-  const blockIndex = useTimerStore((s) => s.blockIndex);
-  const totalBlocks = useTimerStore((s) => s.totalBlocks);
-  const currentBlockName = useTimerStore((s) => s.currentBlockName);
-  const init = useTimerStore((s) => s.init);
-  const play = useTimerStore((s) => s.play);
-  const pause = useTimerStore((s) => s.pause);
-  const resume = useTimerStore((s) => s.resume);
-  const skip = useTimerStore((s) => s.skip);
-  const end = useTimerStore((s) => s.end);
-
-  const remaining = useTimerStore((s) => s._engine?.remaining ?? 0);
-  const progress = useTimerStore((s) => s._engine?.progress ?? 0);
-  const isOverdue = useTimerStore((s) => s._engine?.isOverdue ?? false);
+  // Timer state
+  const phase = useTimerStore(s => s.phase);
+  const blockIndex = useTimerStore(s => s.blockIndex);
+  const totalBlocks = useTimerStore(s => s.totalBlocks);
+  const currentBlockName = useTimerStore(s => s.currentBlockName);
+  const init = useTimerStore(s => s.init);
+  const setPillar = useTimerStore(s => s.setPillar);
+  const play = useTimerStore(s => s.play);
+  const pause = useTimerStore(s => s.pause);
+  const resume = useTimerStore(s => s.resume);
+  const skip = useTimerStore(s => s.skip);
+  const end = useTimerStore(s => s.end);
+  // IMPORTANT: Never select _engine getters here — they compute Date.now() every call
+  // and always return a new value, causing an infinite re-render loop.
+  // Use stable scalar fields (elapsed, blockDurationMs) updated once/second by tick().
+  const elapsed = useTimerStore(s => s.elapsed);
+  const blockDurationMs = useTimerStore(s => s.blockDurationMs);
+  const remaining = blockDurationMs - elapsed;
+  const progress = blockDurationMs > 0 ? Math.min(elapsed / blockDurationMs, 1) : 0;
+  const isOverdue = phase === 'overdue' || (phase === 'running' && remaining < 0);
 
   // Load module → routine → blocks
   useEffect(() => {
-    if (!db || !isReady || !id) {
-      setLoading(false);
-      return;
-    }
+    if (!db || !isReady || !id) { setLoading(false); return; }
     (async () => {
       try {
         const spec = await getModuleSpec(db, id);
-        if (!spec) {
-          setLoading(false);
-          return;
-        }
+        if (!spec) { setLoading(false); return; }
         const config = typeof spec.config === 'string' ? JSON.parse(spec.config) : spec.config;
         setModuleLabel(spec.label);
         setModuleEmoji(spec.emoji ?? '');
         setAutoStart(config.autoStartOnTap ?? false);
-
         const routineId = config.routineId;
-        if (!routineId) {
-          setLoading(false);
-          return;
-        }
-
+        if (!routineId) { setLoading(false); return; }
         const routine = await getRoutine(db, routineId);
-        if (!routine) {
-          Alert.alert('Routine Not Found', 'The linked routine no longer exists.');
-          setLoading(false);
-          return;
-        }
+        if (!routine) { Alert.alert('Routine Not Found'); setLoading(false); return; }
         setRoutineName(routine.name);
         setTotalMinutes(routine.totalDurationMinutes);
         setRoutineMode((routine as any).mode ?? 'sequential');
         setLauncherRoutineId(routineId);
-
+        const rPillar = (routine as any).pillar ?? spec.pillar ?? 'general';
+        setRoutinePillar(rPillar);
         const blks = await getRoutineBlocks(db, routineId);
-        const parsedBlocks = blks.map((b: any) => {
-            let todos: TodoItem[] = [];
-            try { todos = JSON.parse(b.todos ?? '[]'); } catch {}
-            let condition: BlockCondition | null = null;
-            try { condition = b.condition ? JSON.parse(b.condition) : null; } catch {}
-            return {
-              name: b.name,
-              durationMinutes: b.durationMinutes,
-              type: b.type ?? 'focus',
-              blockMode: (b.blockMode ?? 'timed') as Block['blockMode'],
-              goalTarget: b.goalTarget ? Number(b.goalTarget) : null,
-              todos,
-              condition,
-              liftTag: b.liftTag ?? '',
-            };
-          });
-
-        // V2: Feature 3 - load block sets; show picker if multiple sets exist
+        const parsed = blks.map((b: any) => {
+          let todos: TodoItem[] = [];
+          try { todos = JSON.parse(b.todos ?? '[]'); } catch {}
+          let condition: BlockCondition | null = null;
+          try { condition = b.condition ? JSON.parse(b.condition) : null; } catch {}
+          return { name: b.name, durationMinutes: b.durationMinutes, type: b.type ?? 'focus', blockMode: (b.blockMode ?? 'timed') as Block['blockMode'], goalTarget: b.goalTarget ? Number(b.goalTarget) : null, todos, condition, liftTag: b.liftTag ?? '' };
+        });
         const sets = await getRoutineBlockSets(db, routineId);
         setBlockSets(sets as any);
         if (sets.length > 1) {
-          // Show set picker; pre-select default if any
-          const defaultSet = (sets as any[]).find((s: any) => s.isDefault);
-          setSelectedSetId(defaultSet?.id ?? null);
-          setBlocks(parsedBlocks); // store full block list first
+          const def = (sets as any[]).find(s => s.isDefault);
+          setSelectedSetId(def?.id ?? null);
+          setBlocks(parsed);
           setSetPickerVisible(true);
         } else {
-          // No sets or single set — use all blocks directly
-          setBlocks(parsedBlocks);
+          setBlocks(parsed);
         }
-      } catch (e) {
-        console.error('Failed to load routine launcher:', e);
-      } finally {
-        setLoading(false);
-      }
+      } catch (e) { console.error('Failed to load routine launcher:', e); } finally { setLoading(false); }
     })();
   }, [db, isReady, id]);
 
-  // Feature 6: Redirect to count-up session screen for countup_list routines
+  // Feature 6: countup_list redirect
   useEffect(() => {
-    if (!loading && routineMode === 'countup_list' && id) {
-      router.replace(`/countup-session/${id}`);
-    }
+    if (!loading && routineMode === 'countup_list' && id) router.replace(`/countup-session/${id}`);
   }, [loading, routineMode, id]);
 
-  // V2: Feature 3 - confirm set selection and filter blocks
+  // Feature 3: confirm set
   const handleSelectSet = useCallback(async (setId: string | null) => {
     if (!db || !launcherRoutineId) return;
     try {
@@ -247,148 +341,82 @@ export default function RoutineLauncherScreen() {
         try { todos = JSON.parse(b.todos ?? '[]'); } catch {}
         let condition: BlockCondition | null = null;
         try { condition = b.condition ? JSON.parse(b.condition) : null; } catch {}
-        return {
-          name: b.name,
-          durationMinutes: b.durationMinutes,
-          type: b.type ?? 'focus',
-          blockMode: (b.blockMode ?? 'timed') as Block['blockMode'],
-          goalTarget: b.goalTarget ? Number(b.goalTarget) : null,
-          todos,
-          condition,
-          liftTag: b.liftTag ?? '',
-        };
+        return { name: b.name, durationMinutes: b.durationMinutes, type: b.type ?? 'focus', blockMode: (b.blockMode ?? 'timed') as Block['blockMode'], goalTarget: b.goalTarget ? Number(b.goalTarget) : null, todos, condition, liftTag: b.liftTag ?? '' };
       });
       setBlocks(parsed);
       setSelectedSetId(setId);
       setSetPickerVisible(false);
-    } catch (e) {
-      console.error('Failed to filter blocks for set:', e);
-    }
+    } catch (e) { console.error('Failed to filter blocks for set:', e); }
   }, [db, launcherRoutineId]);
 
-  // Start the routine
+  // Start
   const handleStart = useCallback(async () => {
     if (!db || !id) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-
     try {
-      // Ensure a day plan exists for today
       const todayStr = new Date().toISOString().slice(0, 10);
       let dayPlan = await getDayPlan(db, todayStr);
       if (!dayPlan) {
-        const dpId = await upsertDayPlan(db, {
-          date: todayStr,
-          title: 'Today',
-        });
+        const dpId = await upsertDayPlan(db, { date: todayStr, title: 'Today' });
         dayPlan = { id: dpId } as any;
       }
-
-      // Get routineId from module config
       const spec = await getModuleSpec(db, id);
       const config = typeof spec.config === 'string' ? JSON.parse(spec.config) : spec.config;
       const routineId = config.routineId;
-
-      // Create a session
-      const sid = await createSession(db, {
-        dayPlanId: dayPlan.id,
-        routineId,
-        routineName,
-      });
+      const sid = await createSession(db, { dayPlanId: dayPlan.id, routineId, routineName });
       setSessionId(sid);
-
-      // Feature 4: Load any existing todo checked state
       const initialChecked: Record<number, Record<string, boolean>> = {};
       for (let i = 0; i < blocks.length; i++) {
         const rows = await getSessionBlockTodos(db, sid, i);
         if (rows.length > 0) {
           initialChecked[i] = {};
-          for (const row of rows) {
-            initialChecked[i][row.todoId] = row.checked;
-          }
+          for (const row of rows) initialChecked[i][row.todoId] = row.checked;
         }
       }
       setTodoChecked(initialChecked);
-
-      // Feature 5: Load block instructions
       const instrs: Record<number, string> = {};
       for (let i = 0; i < blocks.length; i++) {
         const txt = await getSessionBlockInstructions(db, sid, i);
         if (txt) instrs[i] = txt;
       }
       setBlockInstructions(instrs);
-
-      // Mark session as in-progress
-      await updateSession(db, sid, {
-        status: 'in_progress',
-        startedAt: new Date().toISOString(),
-      });
+      await updateSession(db, sid, { status: 'in_progress', startedAt: new Date().toISOString() });
       await createSessionEvent(db, { sessionId: sid, type: 'started' });
-
-      // Init and start the timer
       init(sid, blocks, routineName);
+      setPillar(routinePillar); // V2: set pillar for FloatingActiveBlockWidget
       play();
       setStarted(true);
-    } catch (e) {
-      console.error('Failed to start routine:', e);
-      Alert.alert('Error', 'Could not start the routine. Please try again.');
-    }
-  }, [db, id, blocks, routineName, init, play]);
+    } catch (e) { console.error('Failed to start routine:', e); Alert.alert('Error', 'Could not start the routine. Please try again.'); }
+  }, [db, id, blocks, routineName, routinePillar, init, setPillar, play]);
 
-  // ─── Feature 2: Count-up timer management ───────────────────────
-  // Start/stop the JS-interval count-up for goal_based / countup blocks
+  // Feature 2: count-up management
   const startCountup = useCallback(() => {
     countupStartRef.current = Date.now() - countupMs;
-    countupRef.current = setInterval(() => {
-      setCountupMs(Date.now() - countupStartRef.current);
-    }, 1000);
+    countupRef.current = setInterval(() => { setCountupMs(Date.now() - countupStartRef.current); }, 1000);
   }, [countupMs]);
-
   const stopCountup = useCallback(() => {
-    if (countupRef.current) {
-      clearInterval(countupRef.current);
-      countupRef.current = null;
-    }
+    if (countupRef.current) { clearInterval(countupRef.current); countupRef.current = null; }
   }, []);
-
-  // Reset count-up state when block changes
   const prevBlockIndex = useRef(blockIndex);
   useEffect(() => {
-    if (blockIndex !== prevBlockIndex.current) {
-      prevBlockIndex.current = blockIndex;
-      stopCountup();
-      setCountupMs(0);
-      setGoalCount(0);
-    }
+    if (blockIndex !== prevBlockIndex.current) { prevBlockIndex.current = blockIndex; stopCountup(); setCountupMs(0); setGoalCount(0); }
   }, [blockIndex, stopCountup]);
-
-  // Cleanup interval on unmount
   useEffect(() => () => { stopCountup(); }, [stopCountup]);
 
-  // ─── Feature 1: canAdvance logic ──────────────────────────────
+  // Feature 1: canAdvance
   const canAdvance = useCallback(() => {
     const cb = blocks[blockIndex];
-    if (!cb) return true;
-    const cond = cb.condition;
-    if (!cond) return true;
-    switch (cond.type) {
+    if (!cb?.condition) return true;
+    switch (cb.condition.type) {
       case 'min_time': {
-        const minMs = (cond.value ?? 0) * 60 * 1000;
-        // For countup blocks use countupMs; for timed blocks use elapsed (duration - remaining)
-        const elapsed = cb.blockMode !== 'timed' ? countupMs : ((cb.durationMinutes * 60 * 1000) - remaining);
+        const minMs = (cb.condition.value ?? 0) * 60 * 1000;
+        const elapsed = cb.blockMode !== 'timed' ? countupMs : (cb.durationMinutes * 60 * 1000 - remaining);
         return elapsed >= minMs;
       }
-      case 'count_reached': {
-        return goalCount >= (cond.value ?? 1);
-      }
-      case 'all_todos_checked': {
-        if (cb.todos.length === 0) return true;
-        const checked = todoChecked[blockIndex] ?? {};
-        return cb.todos.every((t) => checked[t.id]);
-      }
-      case 'manual_only':
-        return false; // User must long-press confirm
-      default:
-        return true;
+      case 'count_reached': return goalCount >= (cb.condition.value ?? 1);
+      case 'all_todos_checked': return cb.todos.length > 0 ? cb.todos.every(t => todoChecked[blockIndex]?.[t.id]) : true;
+      case 'manual_only': return false;
+      default: return true;
     }
   }, [blocks, blockIndex, todoChecked, goalCount, countupMs, remaining]);
 
@@ -404,747 +432,389 @@ export default function RoutineLauncherScreen() {
     }
   }, [blocks, blockIndex, goalCount]);
 
-  // Feature 4: toggle todo checked
+  // Feature 4: toggle todo
   const handleToggleTodo = useCallback(async (todoId: string) => {
     if (!sessionId || !db) return;
     const current = todoChecked[blockIndex]?.[todoId] ?? false;
     const next = !current;
-    setTodoChecked((prev) => {
-      const block = { ...(prev[blockIndex] ?? {}), [todoId]: next };
-      return { ...prev, [blockIndex]: block };
-    });
-    try {
-      await upsertSessionBlockTodo(db, sessionId, blockIndex, todoId, next);
-    } catch (e) { console.warn('upsertSessionBlockTodo failed:', e); }
+    setTodoChecked(prev => ({ ...prev, [blockIndex]: { ...(prev[blockIndex] ?? {}), [todoId]: next } }));
+    try { await upsertSessionBlockTodo(db, sessionId, blockIndex, todoId, next); } catch {}
   }, [db, sessionId, blockIndex, todoChecked]);
 
-  // Feature 2: log goal count
+  // Feature 2: goal count
   const handleLogGoalCount = useCallback(async (increment: number) => {
     const cb = blocks[blockIndex];
     if (!cb) return;
     const next = goalCount + increment;
     setGoalCount(next);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    if (db && sessionId) {
-      createSessionEvent(db, {
-        sessionId,
-        type: 'block_started', // reuse closest event type; real type would need schema ext
-        blockIndex,
-      }).catch(() => {});
-    }
-    // Auto-complete when goal reached
     if (cb.blockMode === 'goal_based' && cb.goalTarget && next >= cb.goalTarget) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      if (blockIndex < blocks.length - 1) {
-        skip();
-      } else {
-        handleEndRef.current();
-      }
+      if (blockIndex < blocks.length - 1) skip(); else handleEndRef.current();
     }
-  }, [goalCount, blockIndex, blocks, db, sessionId, skip]);
+  }, [goalCount, blockIndex, blocks, skip]);
 
   const handlePlayPause = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    if (phase === 'running' || phase === 'overdue') {
-      pause();
-    } else if (phase === 'paused') {
-      resume();
-    } else if (phase === 'idle' && started) {
-      play();
-    }
+    if (phase === 'running' || phase === 'overdue') pause();
+    else if (phase === 'paused') resume();
+    else if (phase === 'idle' && started) play();
   }, [phase, pause, resume, play, started]);
 
   const handleSkip = useCallback(() => {
-    // Feature 1: Block condition gate
-    if (!canAdvance()) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-      Alert.alert('Cannot Advance', conditionReason());
-      return;
-    }
+    if (!canAdvance()) { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning); Alert.alert('Cannot Advance', conditionReason()); return; }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     skip();
-    if (db && sessionId) {
-      createSessionEvent(db, {
-        sessionId,
-        type: 'block_skipped',
-        blockIndex,
-      }).catch((e) => { console.warn('operation failed:', e); });
-    }
+    if (db && sessionId) createSessionEvent(db, { sessionId, type: 'block_skipped', blockIndex }).catch(() => {});
   }, [skip, db, sessionId, blockIndex, canAdvance, conditionReason]);
 
   const handleEnd = useCallback(async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     end();
-
     if (db && sessionId) {
-      try {
-        await updateSession(db, sessionId, {
-          status: 'completed',
-          endedAt: new Date().toISOString(),
-        });
-        await createSessionEvent(db, { sessionId, type: 'ended' });
-      } catch (e) { console.warn('operation failed:', e); }
+      try { await updateSession(db, sessionId, { status: 'completed', endedAt: new Date().toISOString() }); await createSessionEvent(db, { sessionId, type: 'ended' }); } catch {}
     }
-
-    Alert.alert(
-      '✅ Routine Complete!',
-      `${routineName} finished successfully.`,
-      [{ text: 'Done', onPress: () => router.canGoBack() ? router.back() : router.replace('/(tabs)') }],
-    );
+    Alert.alert('\u2705 Routine Complete!', `${routineName} finished successfully.`, [{ text: 'Done', onPress: () => router.canGoBack() ? router.back() : router.replace('/(tabs)') }]);
   }, [end, db, sessionId, routineName, router]);
 
   const handleAbandon = useCallback(() => {
     Alert.alert('End Routine?', 'Your progress for this session will be saved.', [
       { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'End',
-        style: 'destructive',
-        onPress: async () => {
-          end();
-          if (db && sessionId) {
-            await updateSession(db, sessionId, {
-              status: 'abandoned',
-              endedAt: new Date().toISOString(),
-            }).catch((e) => { console.warn('operation failed:', e); });
-          }
-          router.canGoBack() ? router.back() : router.replace('/(tabs)');
-        },
-      },
+      { text: 'End', style: 'destructive', onPress: async () => {
+        end();
+        if (db && sessionId) await updateSession(db, sessionId, { status: 'abandoned', endedAt: new Date().toISOString() }).catch(() => {});
+        router.canGoBack() ? router.back() : router.replace('/(tabs)');
+      }},
     ]);
   }, [end, db, sessionId, router]);
 
-  // Auto-complete when timer engine says completed — use ref to avoid stale closure
   const handleEndRef = useRef(handleEnd);
   handleEndRef.current = handleEnd;
 
-  useEffect(() => {
-    if (phase === 'completed' && started) {
-      handleEndRef.current();
-    }
-  }, [phase, started]);
+  useEffect(() => { if (phase === 'completed' && started) handleEndRef.current(); }, [phase, started]);
 
-  // BUG-13: Auto-complete session when last block's timer expires (enters 'overdue').
-  // The engine transitions running→overdue but never auto-calls end() without user input.
-  // When the last block is overdue, schedule handleEnd with a 400ms delay so the user
-  // can see the final state before the debrief transition.
   const autoEndScheduled = useRef(false);
   useEffect(() => {
     if (phase === 'overdue' && started && blockIndex >= blocks.length - 1 && !autoEndScheduled.current) {
       autoEndScheduled.current = true;
-      const timer = setTimeout(() => {
-        handleEndRef.current();
-      }, 400);
-      return () => clearTimeout(timer);
+      const t = setTimeout(() => { handleEndRef.current(); }, 400);
+      return () => clearTimeout(t);
     }
-    if (phase !== 'overdue') {
-      autoEndScheduled.current = false;
-    }
+    if (phase !== 'overdue') autoEndScheduled.current = false;
   }, [phase, started, blockIndex, blocks.length]);
 
+  // Derived
   const timerProgress = Math.min(progress, 1);
   const strokeDashoffset = CIRCUMFERENCE * (1 - timerProgress);
-  const ringColor = isOverdue ? themeColors.danger : (TYPE_COLORS[blocks[blockIndex]?.type] ?? themeColors.accent);
+  const pillarColor = getPillarColour(routinePillar as Pillar);
+  const ringColor = isOverdue ? themeTokens.destructive : pillarColor;
   const isPaused = phase === 'paused';
   const isRunning = phase === 'running' || phase === 'overdue';
-  // Feature 1: compute canAdvance for current render
   const advanceOk = canAdvance();
-
-  if (loading) {
-    return (
-      <View style={[styles.container, { backgroundColor: themeColors.background }]}>
-        <ActivityIndicator size="large" color={themeColors.accent} />
-        <Text style={[styles.loadingText, { color: themeColors.muted }]}>Loading routine...</Text>
-      </View>
-    );
-  }
-
-  // V2: Feature 3 - Block Set picker (shown when routine has multiple sets)
-  if (setPickerVisible) {
-    return (
-      <View style={[styles.container, { backgroundColor: themeColors.background }]}>
-        <Text style={[styles.routineTitle, { color: themeColors.text }]}>Choose a Set</Text>
-        <Text style={[styles.routineSubtitle, { color: themeColors.muted }]}>
-          {routineName} has multiple block sets. Select which one to run today.
-        </Text>
-        <ScrollView style={{ width: '100%', marginTop: spacing.lg }} contentContainerStyle={{ gap: spacing.sm, paddingHorizontal: spacing.lg }}>
-          {/* "All blocks" option */}
-          <Pressable
-            style={[
-              styles.setPickerCard,
-              { backgroundColor: themeColors.surface, borderColor: selectedSetId === null ? themeColors.accent : themeColors.border },
-              selectedSetId === null && { borderWidth: 2 },
-            ]}
-            onPress={() => setSelectedSetId(null)}
-          >
-            <Feather name="layers" size={20} color={selectedSetId === null ? themeColors.accent : themeColors.muted} />
-            <View style={{ flex: 1, marginLeft: spacing.sm }}>
-              <Text style={[styles.setPickerName, { color: themeColors.text }]}>All Blocks</Text>
-              <Text style={[styles.setPickerDesc, { color: themeColors.muted }]}>Run the complete routine without filtering</Text>
-            </View>
-            {selectedSetId === null && <Feather name="check-circle" size={20} color={themeColors.accent} />}
-          </Pressable>
-          {blockSets.map((set) => (
-            <Pressable
-              key={set.id}
-              style={[
-                styles.setPickerCard,
-                { backgroundColor: themeColors.surface, borderColor: selectedSetId === set.id ? themeColors.accent : themeColors.border },
-                selectedSetId === set.id && { borderWidth: 2 },
-              ]}
-              onPress={() => setSelectedSetId(set.id)}
-            >
-              <Feather name="bookmark" size={20} color={selectedSetId === set.id ? themeColors.accent : themeColors.muted} />
-              <View style={{ flex: 1, marginLeft: spacing.sm }}>
-                <Text style={[styles.setPickerName, { color: themeColors.text }]}>
-                  {set.name}{set.isDefault ? '  ★ Default' : ''}
-                </Text>
-              </View>
-              {selectedSetId === set.id && <Feather name="check-circle" size={20} color={themeColors.accent} />}
-            </Pressable>
-          ))}
-        </ScrollView>
-        <Pressable
-          style={[styles.startBtn, { backgroundColor: themeColors.accent, marginTop: spacing.xl }]}
-          onPress={() => handleSelectSet(selectedSetId)}
-        >
-          <Feather name="play" size={20} color="#fff" />
-          <Text style={[styles.startBtnText, { color: '#fff' }]}>Continue with this set</Text>
-        </Pressable>
-        <Pressable
-          style={[styles.backBtn, { backgroundColor: themeColors.surface, marginTop: spacing.sm }]}
-          onPress={() => router.canGoBack() ? router.back() : router.replace('/(tabs)')}
-        >
-          <Text style={[styles.backBtnText, { color: themeColors.muted }]}>Cancel</Text>
-        </Pressable>
-      </View>
-    );
-  }
-
-  if (blocks.length === 0 && !setPickerVisible) {
-    return (
-      <View style={[styles.container, { backgroundColor: themeColors.background }]}>
-        <Feather name="alert-circle" size={48} color={themeColors.danger} />
-        <Text style={[styles.routineTitle, { color: themeColors.text }]}>No Blocks Found</Text>
-        <Text style={[styles.loadingText, { color: themeColors.muted }]}>This routine has no blocks. Edit it to add blocks.</Text>
-        <Pressable style={[styles.backBtn, { backgroundColor: themeColors.surface }]} onPress={() => router.canGoBack() ? router.back() : router.replace('/(tabs)')}>
-          <Text style={[styles.backBtnText, { color: themeColors.accent }]}>Go Back</Text>
-        </Pressable>
-      </View>
-    );
-  }
-
-  // ─── Pre-start view: routine overview ───
-  if (!started) {
-    return (
-      <View style={[styles.container, { backgroundColor: themeColors.background }]}>
-        <ScrollView contentContainerStyle={styles.preStartContent} showsVerticalScrollIndicator={false}>
-          <Text style={styles.preStartEmoji}>{moduleEmoji || '🚀'}</Text>
-          <Text style={[styles.routineTitle, { color: themeColors.text }]}>{moduleLabel || routineName}</Text>
-          <Text style={[styles.routineSubtitle, { color: themeColors.muted }]}>
-            {routineMode === 'countup_list' ? 'Count-Up List' : `${totalMinutes} min`} · {blocks.length} blocks
-          </Text>
-
-          <View style={styles.blockList}>
-            {blocks.map((b, i) => (
-              <View key={i} style={[styles.blockCard, { backgroundColor: themeColors.surface }]}>
-                <View style={[styles.blockTypeBadge, { backgroundColor: (TYPE_COLORS[b.type] ?? themeColors.muted) + '20' }]}>
-                  <Text style={[styles.blockTypeText, { color: TYPE_COLORS[b.type] ?? themeColors.muted }]}>
-                    {TYPE_LABELS[b.type] ?? b.type}
-                  </Text>
-                </View>
-                <View style={styles.blockCardInfo}>
-                  <Text style={[styles.blockCardName, { color: themeColors.text }]}>{b.name}</Text>
-                  <Text style={[styles.blockCardDur, { color: themeColors.muted }]}>
-                    {b.blockMode === 'goal_based' ? `Goal: ${b.goalTarget ?? '?'}` : b.blockMode === 'countup' ? 'Open-ended' : `${b.durationMinutes} min`}
-                  </Text>
-                </View>
-                <View style={[styles.blockIndex, { backgroundColor: themeColors.surfaceBorder }]}>
-                  <Text style={[styles.blockIndexText, { color: themeColors.muted }]}>{i + 1}</Text>
-                </View>
-              </View>
-            ))}
-          </View>
-        </ScrollView>
-
-        <Pressable style={[styles.startBtn, { backgroundColor: themeColors.accent }]} onPress={handleStart}>
-          <Feather name="play" size={22} color={themeColors.white} />
-          <Text style={[styles.startBtnText, { color: themeColors.white }]}>Start Routine</Text>
-        </Pressable>
-      </View>
-    );
-  }
-
-  // ─── Active timer view ───
   const currentBlock = blocks[blockIndex];
   const isGoalBased = currentBlock?.blockMode === 'goal_based';
-  const isCountup = currentBlock?.blockMode === 'countup' || routineMode === 'countup_list';
+  const isCountup = currentBlock?.blockMode === 'countup';
   const blockTodos = currentBlock?.todos ?? [];
   const blockChecked = todoChecked[blockIndex] ?? {};
   const instructions = blockInstructions[blockIndex] ?? '';
+  const isGym = routinePillar === 'gym';
 
-  return (
-    <ScrollView
-      style={{ flex: 1, backgroundColor: themeColors.background }}
-      contentContainerStyle={[styles.container, { paddingVertical: spacing.xl }]}
-      showsVerticalScrollIndicator={false}
-    >
-      <Text style={[styles.routineTitle, { color: themeColors.text }]}>{routineName}</Text>
+  // ─── Loading ─────────────────────────────────────────────────────────────────
+  if (loading) return (
+    <View style={[S.fill, { backgroundColor: themeTokens.background, justifyContent: 'center', alignItems: 'center' }]}>
+      <Feather name="loader" size={32} color={themeTokens.textTertiary} />
+      <AppText variant="body" color={themeTokens.textTertiary} style={{ marginTop: space[16] }}>Loading routine…</AppText>
+    </View>
+  );
 
-      {/* Timer ring — show count-up for goal/countup modes */}
-      <Animated.View style={[styles.ringContainer, { transform: [{ scale: pulseAnim }] }]}>
-        {isGoalBased || isCountup ? (
-          // Count-up display (no progress ring fill)
-          <Svg width={RING_SIZE} height={RING_SIZE}>
-            <Circle cx={RING_SIZE / 2} cy={RING_SIZE / 2} r={RADIUS}
-              stroke={themeColors.surfaceBorder} strokeWidth={STROKE_WIDTH} fill="none" />
-            <Circle cx={RING_SIZE / 2} cy={RING_SIZE / 2} r={RADIUS}
-              stroke={ringColor} strokeWidth={STROKE_WIDTH} fill="none"
-              strokeDasharray={CIRCUMFERENCE}
-              strokeDashoffset={isGoalBased && currentBlock.goalTarget
-                ? CIRCUMFERENCE * (1 - Math.min(goalCount / currentBlock.goalTarget, 1))
-                : 0}
-              strokeLinecap="round"
-              transform={`rotate(-90 ${RING_SIZE / 2} ${RING_SIZE / 2})`} />
-          </Svg>
-        ) : (
-          <Svg width={RING_SIZE} height={RING_SIZE}>
-            <Circle cx={RING_SIZE / 2} cy={RING_SIZE / 2} r={RADIUS}
-              stroke={themeColors.surfaceBorder} strokeWidth={STROKE_WIDTH} fill="none" />
-            <Circle cx={RING_SIZE / 2} cy={RING_SIZE / 2} r={RADIUS}
-              stroke={ringColor} strokeWidth={STROKE_WIDTH} fill="none"
-              strokeDasharray={CIRCUMFERENCE} strokeDashoffset={strokeDashoffset}
-              strokeLinecap="round"
-              transform={`rotate(-90 ${RING_SIZE / 2} ${RING_SIZE / 2})`} />
-          </Svg>
-        )}
-        <View style={styles.timeOverlay}>
-          {isCountup ? (
-            <Text style={[styles.timeText, { color: ringColor }]}>{formatTime(countupMs)}</Text>
-          ) : isGoalBased ? (
-            <>
-              <Text style={[styles.goalCountText, { color: ringColor }]}>{goalCount}</Text>
-              <Text style={[styles.goalTargetText, { color: themeColors.muted }]}>/ {currentBlock.goalTarget ?? '?'}</Text>
-            </>
-          ) : (
-            <Text style={[styles.timeText, { color: themeColors.text }, isOverdue && { color: themeColors.danger }]}>
-              {formatTime(remaining)}
-            </Text>
-          )}
-        </View>
-      </Animated.View>
-
-      {/* Current block info */}
-      <View style={[styles.currentBlockBadge, { backgroundColor: (TYPE_COLORS[currentBlock?.type] ?? themeColors.accent) + '20' }]}>
-        <Text style={[styles.currentBlockType, { color: TYPE_COLORS[currentBlock?.type] ?? themeColors.accent }]}>
-          {TYPE_LABELS[currentBlock?.type] ?? currentBlock?.type}
-        </Text>
-      </View>
-      <Text style={[styles.blockNameLarge, { color: themeColors.text }]}>{currentBlockName || currentBlock?.name || 'Ready'}</Text>
-      <Text style={[styles.blockMeta, { color: themeColors.muted }]}>Block {blockIndex + 1} of {totalBlocks || blocks.length}</Text>
-
-      {/* Feature 5: Per-block instructions subtitle */}
-      {!!instructions && (
-        <Text style={[styles.instructionText, { color: themeColors.muted }]} numberOfLines={2}>
-          {instructions}
-        </Text>
-      )}
-
-      {/* Block chips */}
-      <View style={styles.chipRow}>
-        {blocks.map((_b, i) => (
-          <View
-            key={i}
-            style={[
-              styles.chip,
-              { backgroundColor: themeColors.surfaceBorder },
-              i < blockIndex && { backgroundColor: themeColors.success },
-              i === blockIndex && styles.chipActive,
-              i === blockIndex && { backgroundColor: TYPE_COLORS[_b.type] ?? themeColors.accent },
-            ]}
-          />
-        ))}
-      </View>
-
-      {/* Feature 2: Goal-based counter buttons */}
-      {isGoalBased && (
-        <View style={[styles.goalRow, { backgroundColor: themeColors.surface }]}>
-          <Pressable
-            style={[styles.goalBtn, { backgroundColor: themeColors.surfaceBorder }]}
-            onPress={() => setGoalCount((n) => Math.max(0, n - 1))}
-          >
-            <Feather name="minus" size={20} color={themeColors.text} />
-          </Pressable>
-          <View style={styles.goalCenter}>
-            <Text style={[styles.goalBtnLabel, { color: themeColors.muted }]}>Reps / Count</Text>
-            <Text style={[styles.goalCountLarge, { color: themeColors.text }]}>{goalCount}</Text>
+  // ─── Feature 3: Block Set picker ─────────────────────────────────────────────
+  if (setPickerVisible) return (
+    <View style={[S.fill, { backgroundColor: themeTokens.background, paddingTop: insets.top + space[24], paddingHorizontal: space[16] }]}>
+      <AppText variant="title1" style={{ fontWeight: '700', textAlign: 'center' }}>Choose a Set</AppText>
+      <AppText variant="body" color={themeTokens.textSecondary} style={{ textAlign: 'center', marginTop: space[8], marginBottom: space[24] }}>
+        {routineName} has multiple block sets.
+      </AppText>
+      <ScrollView contentContainerStyle={{ gap: space[12] }}>
+        <Pressable style={[S.setCard, { backgroundColor: themeTokens.surfaceElevated, borderColor: selectedSetId === null ? themeTokens.accent : themeTokens.border, borderWidth: selectedSetId === null ? 2 : 1 }]} onPress={() => setSelectedSetId(null)}>
+          <Feather name="layers" size={20} color={selectedSetId === null ? themeTokens.accent : themeTokens.textSecondary} />
+          <View style={{ flex: 1, marginLeft: space[12] }}>
+            <AppText variant="headline" style={{ fontWeight: '600' }}>All Blocks</AppText>
+            <AppText variant="footnote" color={themeTokens.textSecondary}>Run the complete routine</AppText>
           </View>
+          {selectedSetId === null && <Feather name="check-circle" size={20} color={themeTokens.accent} />}
+        </Pressable>
+        {blockSets.map(set => (
+          <Pressable key={set.id} style={[S.setCard, { backgroundColor: themeTokens.surfaceElevated, borderColor: selectedSetId === set.id ? themeTokens.accent : themeTokens.border, borderWidth: selectedSetId === set.id ? 2 : 1 }]} onPress={() => setSelectedSetId(set.id)}>
+            <Feather name="bookmark" size={20} color={selectedSetId === set.id ? themeTokens.accent : themeTokens.textSecondary} />
+            <AppText variant="headline" style={{ flex: 1, marginLeft: space[12], fontWeight: '600' }}>{set.name}{set.isDefault ? '  ★' : ''}</AppText>
+            {selectedSetId === set.id && <Feather name="check-circle" size={20} color={themeTokens.accent} />}
+          </Pressable>
+        ))}
+      </ScrollView>
+      <Pressable style={[S.filledBtn, { backgroundColor: themeTokens.accent, marginTop: space[24], marginBottom: insets.bottom + space[16] }]} onPress={() => handleSelectSet(selectedSetId)}>
+        <Feather name="play" size={20} color="#fff" />
+        <AppText variant="headline" onAccent style={{ fontWeight: '600' }}>Continue</AppText>
+      </Pressable>
+    </View>
+  );
+
+  // ─── Empty blocks ─────────────────────────────────────────────────────────────
+  if (blocks.length === 0) return (
+    <View style={[S.fill, { backgroundColor: themeTokens.background, justifyContent: 'center', alignItems: 'center', padding: space[24] }]}>
+      <Feather name="alert-circle" size={48} color={themeTokens.destructive} />
+      <AppText variant="title2" style={{ fontWeight: '700', marginTop: space[16], textAlign: 'center' }}>No Blocks Found</AppText>
+      <AppText variant="body" color={themeTokens.textSecondary} style={{ textAlign: 'center', marginTop: space[8] }}>Edit this routine to add blocks.</AppText>
+      <Pressable style={[S.ghostBtn, { borderColor: themeTokens.border, marginTop: space[24] }]} onPress={() => router.canGoBack() ? router.back() : router.replace('/(tabs)')}>
+        <AppText variant="subheadline" color={themeTokens.textSecondary}>Go Back</AppText>
+      </Pressable>
+    </View>
+  );
+
+  // ─── Pre-start overview ───────────────────────────────────────────────────────
+  if (!started) return (
+    <View style={[S.fill, { backgroundColor: themeTokens.background }]}>
+      {/* Pillar accent bar at top */}
+      <View style={[S.topAccentBar, { backgroundColor: pillarColor }]} />
+      <ScrollView contentContainerStyle={[S.preStartScroll, { paddingTop: insets.top + space[32] }]}>
+        <AppText style={S.emoji}>{moduleEmoji || '🚀'}</AppText>
+        <AppText variant="title1" style={{ fontWeight: '700', textAlign: 'center' }}>{moduleLabel || routineName}</AppText>
+        <AppText variant="footnote" color={themeTokens.textSecondary} style={{ marginTop: space[4], marginBottom: space[24], textAlign: 'center' }}>
+          {totalMinutes > 0 ? `${totalMinutes} min · ` : ''}{blocks.length} blocks
+        </AppText>
+        <View style={S.blockList}>
+          {blocks.map((b, i) => (
+            <View key={i} style={[S.preStartBlockRow, { backgroundColor: themeTokens.surfaceElevated, borderColor: themeTokens.border }]}>
+              <View style={[S.preStartStripe, { backgroundColor: pillarColor }]} />
+              <View style={{ flex: 1, paddingHorizontal: space[12], paddingVertical: space[12] }}>
+                <AppText variant="headline" style={{ fontWeight: '600' }} numberOfLines={1}>{b.name}</AppText>
+                <AppText variant="footnote" color={themeTokens.textSecondary}>
+                  {b.blockMode === 'goal_based' ? `Goal: ${b.goalTarget ?? '?'}` : b.blockMode === 'countup' ? 'Open-ended' : `${b.durationMinutes} min`}
+                  {b.type !== 'focus' ? `  ·  ${TYPE_LABEL[b.type] ?? b.type}` : ''}
+                </AppText>
+              </View>
+              <AppText variant="caption2" color={themeTokens.textTertiary} style={{ paddingRight: space[12], paddingTop: space[12] }}>{i + 1}</AppText>
+            </View>
+          ))}
+        </View>
+        <View style={{ height: 120 }} />
+      </ScrollView>
+      <Pressable style={[S.filledBtn, { backgroundColor: pillarColor, position: 'absolute', bottom: insets.bottom + space[24], left: space[16], right: space[16] }]} onPress={handleStart}>
+        <Feather name="play" size={22} color="#fff" />
+        <AppText variant="headline" onAccent style={{ fontWeight: '700' }}>Start Routine</AppText>
+      </Pressable>
+    </View>
+  );
+
+  // ─── Active timer canvas ──────────────────────────────────────────────────────
+  return (
+    <KeyboardAvoidingView style={S.fill} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <View style={[S.fill, { backgroundColor: themeTokens.background }]}>
+
+        {/* Session progress bar — absolute top */}
+        <View style={[S.sessionProgressTrack, { top: insets.top + 15, backgroundColor: themeTokens.accentTint }]}>
+          <View style={[S.sessionProgressFill, { width: `${(blockIndex / Math.max(blocks.length, 1)) * 100}%` as any, backgroundColor: pillarColor }]} />
+        </View>
+
+        {/* Back / abandon — top-left */}
+        <Pressable style={[S.abandonBtn, { top: insets.top + space[8] }]} onPress={handleAbandon}>
+          <Feather name="x" size={22} color={themeTokens.textTertiary} />
+        </Pressable>
+
+        {/* Centre canvas (scrollable) */}
+        <ScrollView
+          contentContainerStyle={[S.canvasScroll, { paddingTop: insets.top + space[48] }]}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          {/* Routine name */}
+          <AppText variant="footnote" color={themeTokens.textSecondary} style={{ textAlign: 'center' }}>{routineName}</AppText>
+
+          {/* Block name */}
+          <AppText variant="title1" style={{ fontWeight: '700', textAlign: 'center', marginTop: space[8] }} numberOfLines={2}>
+            {currentBlockName || currentBlock?.name || 'Ready'}
+          </AppText>
+
+          {/* Block position */}
+          <AppText variant="caption1" color={themeTokens.textTertiary} style={{ textAlign: 'center', marginTop: space[4] }}>
+            Block {blockIndex + 1} of {totalBlocks || blocks.length}
+          </AppText>
+
+          {/* Timer ring */}
+          <View style={S.ringWrap}>
+            {/* Pulse glow ring */}
+            <Animated.View
+              style={[S.pulseGlow, { borderColor: ringColor, transform: [{ scale: pulseAnim }] }]}
+              pointerEvents="none"
+            />
+            <Svg width={RING_SIZE} height={RING_SIZE} style={{ transform: [{ rotate: '-90deg' }] }}>
+              {/* Track */}
+              <Circle cx={RING_SIZE / 2} cy={RING_SIZE / 2} r={RADIUS} stroke={themeTokens.accentTint} strokeWidth={STROKE_WIDTH} fill="none" />
+              {/* Progress */}
+              {isGoalBased ? (
+                <Circle cx={RING_SIZE / 2} cy={RING_SIZE / 2} r={RADIUS} stroke={ringColor} strokeWidth={STROKE_WIDTH} fill="none"
+                  strokeDasharray={CIRCUMFERENCE}
+                  strokeDashoffset={currentBlock.goalTarget ? CIRCUMFERENCE * (1 - Math.min(goalCount / currentBlock.goalTarget, 1)) : 0}
+                  strokeLinecap="round" />
+              ) : isCountup ? (
+                <Circle cx={RING_SIZE / 2} cy={RING_SIZE / 2} r={RADIUS} stroke={ringColor} strokeWidth={STROKE_WIDTH} fill="none"
+                  strokeDasharray={CIRCUMFERENCE} strokeDashoffset={0} strokeLinecap="round" />
+              ) : (
+                <Circle cx={RING_SIZE / 2} cy={RING_SIZE / 2} r={RADIUS} stroke={ringColor} strokeWidth={STROKE_WIDTH} fill="none"
+                  strokeDasharray={CIRCUMFERENCE} strokeDashoffset={strokeDashoffset} strokeLinecap="round" />
+              )}
+            </Svg>
+            {/* Timer text inside ring */}
+            <View style={S.timerOverlay}>
+              {isCountup ? (
+                <AppText variant="display" style={[S.timerFont, { color: ringColor }]}>{formatTime(countupMs)}</AppText>
+              ) : isGoalBased ? (
+                <>
+                  <AppText variant="display" style={[S.timerFont, { color: ringColor }]}>{goalCount}</AppText>
+                  <AppText variant="footnote" color={themeTokens.textTertiary}>/ {currentBlock.goalTarget ?? '?'}</AppText>
+                </>
+              ) : (
+                <AppText variant="display" style={[S.timerFont, { color: isOverdue ? themeTokens.destructive : themeTokens.textPrimary }]}>
+                  {formatTime(remaining)}
+                </AppText>
+              )}
+            </View>
+          </View>
+
+          {/* Block chips (progress dots) */}
+          <View style={S.chipRow}>
+            {blocks.map((_, i) => (
+              <View key={i} style={[S.chip, i < blockIndex && { backgroundColor: ringColor }, i === blockIndex && { backgroundColor: ringColor, width: 20 }, i > blockIndex && { backgroundColor: themeTokens.accentTint }]} />
+            ))}
+          </View>
+
+          {/* Feature 2: Goal counter */}
+          {isGoalBased && (
+            <View style={[S.goalRow, { backgroundColor: themeTokens.surfaceElevated, borderColor: themeTokens.border }]}>
+              <Pressable style={[S.goalBtn, { backgroundColor: themeTokens.surface }]} onPress={() => setGoalCount(n => Math.max(0, n - 1))}>
+                <Feather name="minus" size={20} color={themeTokens.textPrimary} />
+              </Pressable>
+              <View style={S.goalCenter}>
+                <AppText variant="footnote" color={themeTokens.textSecondary}>Reps / Count</AppText>
+                <AppText variant="display" style={[S.timerFont, { color: themeTokens.textPrimary }]}>{goalCount}</AppText>
+              </View>
+              <Pressable style={[S.goalBtn, { backgroundColor: ringColor }]} onPress={() => handleLogGoalCount(1)}>
+                <Feather name="plus" size={20} color="#fff" />
+              </Pressable>
+            </View>
+          )}
+
+          {/* Condition lock indicator */}
+          {!advanceOk && (
+            <View style={[S.conditionBanner, { backgroundColor: themeTokens.warning + '20', borderColor: themeTokens.warning }]}>
+              <Feather name="lock" size={14} color={themeTokens.warning} />
+              <AppText variant="footnote" color={themeTokens.warning}>{conditionReason()}</AppText>
+            </View>
+          )}
+
+          <View style={{ height: DRAWER_PEEK + space[24] }} />
+        </ScrollView>
+
+        {/* Fixed control bar */}
+        <View style={[S.controlBar, { paddingBottom: space[12] }]}>
+          {/* Skip Block — ghost left */}
           <Pressable
-            style={[styles.goalBtn, { backgroundColor: ringColor }]}
-            onPress={() => handleLogGoalCount(1)}
+            style={[S.ghostBtn, { flex: 1, borderColor: advanceOk ? themeTokens.border : themeTokens.accentTint, opacity: advanceOk ? 1 : 0.5 }]}
+            onPress={blockIndex < blocks.length - 1 ? handleSkip : handleEnd}
+            disabled={!advanceOk}
           >
-            <Feather name="plus" size={20} color={themeColors.white} />
+            <Feather name={advanceOk ? (blockIndex < blocks.length - 1 ? 'skip-forward' : 'check') : 'lock'} size={16} color={themeTokens.textSecondary} />
+            <AppText variant="subheadline" color={themeTokens.textSecondary}>{blockIndex < blocks.length - 1 ? 'Skip' : 'Finish'}</AppText>
+          </Pressable>
+
+          {/* Pause/Resume — filled accent centre */}
+          <Pressable
+            style={[S.pauseBtn, { backgroundColor: themeTokens.accent }]}
+            onPress={handlePlayPause}
+          >
+            <Feather name={isRunning ? 'pause' : 'play'} size={24} color="#fff" />
+            <AppText variant="headline" onAccent style={{ fontWeight: '600' }}>{isRunning ? 'Pause' : 'Resume'}</AppText>
+          </Pressable>
+
+          {/* End — ghost destructive right */}
+          <Pressable
+            style={[S.ghostBtn, { flex: 1, borderColor: themeTokens.destructive + '40' }]}
+            onPress={handleAbandon}
+          >
+            <Feather name="x-circle" size={16} color={themeTokens.destructive} />
+            <AppText variant="subheadline" color={themeTokens.destructive}>End</AppText>
           </Pressable>
         </View>
-      )}
 
-      {/* Feature 4: Block Todos checklist */}
-      {blockTodos.length > 0 && (
-        <View style={[styles.todosCard, { backgroundColor: themeColors.surface }]}>
-          <Text style={[styles.todosSectionTitle, { color: themeColors.muted }]}>CHECKLIST</Text>
-          {blockTodos.map((todo) => {
-            const checked = blockChecked[todo.id] ?? false;
-            return (
-              <Pressable
-                key={todo.id}
-                style={styles.todoLaunchRow}
-                onPress={() => handleToggleTodo(todo.id)}
-              >
-                <View style={[
-                  styles.todoCheckbox,
-                  { borderColor: themeColors.surfaceBorder },
-                  checked && { backgroundColor: themeColors.success, borderColor: themeColors.success },
-                ]}>
-                  {checked && <Feather name="check" size={12} color={themeColors.white} />}
-                </View>
-                <Text style={[
-                  styles.todoLaunchText,
-                  { color: themeColors.text },
-                  checked && { color: themeColors.muted, textDecorationLine: 'line-through' },
-                ]}>
-                  {todo.text}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-      )}
-
-      {/* Feature 1: Condition lock indicator */}
-      {!advanceOk && (
-        <View style={[styles.conditionBanner, { backgroundColor: themeColors.warning + '20' }]}>
-          <Feather name="lock" size={14} color={themeColors.warning} />
-          <Text style={[styles.conditionText, { color: themeColors.warning }]}>{conditionReason()}</Text>
-        </View>
-      )}
-
-      {/* Controls */}
-      <View style={styles.controls}>
-        <Pressable style={[styles.controlBtn, { backgroundColor: themeColors.surface }]} onPress={handleAbandon}>
-          <Feather name="x" size={24} color={themeColors.danger} />
-        </Pressable>
-
-        <Pressable style={[styles.mainBtn, { backgroundColor: ringColor }]} onPress={handlePlayPause}>
-          <Feather
-            name={isRunning ? 'pause' : 'play'}
-            size={32}
-            color={themeColors.white}
-          />
-        </Pressable>
-
-        <Pressable
-          style={[
-            styles.controlBtn,
-            { backgroundColor: advanceOk ? themeColors.surface : themeColors.surfaceBorder },
-          ]}
-          onPress={blockIndex < blocks.length - 1 ? handleSkip : handleEnd}
-        >
-          {advanceOk ? (
-            <Feather
-              name={blockIndex < blocks.length - 1 ? 'skip-forward' : 'check'}
-              size={24}
-              color={themeColors.accent}
-            />
-          ) : (
-            <Feather name="lock" size={24} color={themeColors.muted} />
-          )}
-        </Pressable>
+        {/* Bottom drawer */}
+        <BottomDrawer
+          isOpen={drawerOpen}
+          onToggle={() => setDrawerOpen(v => !v)}
+          todos={blockTodos}
+          todoChecked={blockChecked}
+          onToggleTodo={handleToggleTodo}
+          instructions={instructions}
+          sessionNotes={sessionNotes}
+          onNotesChange={setSessionNotes}
+          isGym={isGym}
+          screenHeight={screenHeight}
+          pillarColor={pillarColor}
+        />
       </View>
-    </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: spacing.lg,
-  },
-  loadingText: {
-    marginTop: spacing.sm,
-    fontSize: fontSize.md,
-    textAlign: 'center',
-  },
-  backBtn: {
-    marginTop: spacing.lg,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.lg,
-    borderRadius: borderRadius.md,
-  },
-  backBtnText: {
-    fontWeight: '600',
-    fontSize: fontSize.md,
-  },
+// ─── Styles ───────────────────────────────────────────────────────────────────
+const S = StyleSheet.create({
+  fill: { flex: 1 },
+  emoji: { fontSize: 56, textAlign: 'center', marginBottom: space[16] },
 
-  // ─── Pre-start ───
-  preStartContent: {
-    alignItems: 'center',
-    paddingTop: 60,
-    paddingBottom: 120,
-  },
-  preStartEmoji: {
-    fontSize: 56,
-    marginBottom: spacing.md,
-  },
-  routineTitle: {
-    fontSize: fontSize.xl,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  routineSubtitle: {
-    fontSize: fontSize.md,
-    marginTop: 4,
-    marginBottom: spacing.lg,
-  },
-  blockList: {
-    width: '100%',
-    gap: spacing.sm,
-  },
-  blockCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: borderRadius.md,
-    padding: spacing.md,
-  },
-  blockTypeBadge: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
-    borderRadius: borderRadius.sm,
-    marginRight: spacing.sm,
-  },
-  blockTypeText: {
-    fontSize: fontSize.xs,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-  },
-  blockCardInfo: {
-    flex: 1,
-  },
-  blockCardName: {
-    fontSize: fontSize.md,
-    fontWeight: '600',
-  },
-  blockCardDur: {
-    fontSize: fontSize.sm,
-    marginTop: 2,
-  },
-  blockIndex: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  blockIndexText: {
-    fontSize: fontSize.sm,
-    fontWeight: '700',
-  },
-  startBtn: {
-    position: 'absolute',
-    bottom: 40,
-    left: spacing.lg,
-    right: spacing.lg,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.sm,
-    paddingVertical: spacing.md,
-    borderRadius: borderRadius.lg,
-  },
-  startBtnText: {
-    fontSize: fontSize.lg,
-    fontWeight: '700',
-  },
+  topAccentBar: { position: 'absolute', top: 0, left: 0, right: 0, height: 4, zIndex: 10 },
+  sessionProgressTrack: { position: 'absolute', left: 0, right: 0, height: 4, zIndex: 10 },
+  sessionProgressFill: { height: '100%' },
+  abandonBtn: { position: 'absolute', left: space[16], zIndex: 20, padding: space[8] },
 
-  // ─── Active timer ───
-  ringContainer: {
-    marginVertical: spacing.lg,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  timeOverlay: {
-    position: 'absolute',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  timeText: {
-    fontSize: 48,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
-  },
-  currentBlockBadge: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: 6,
-    borderRadius: borderRadius.md,
-    marginBottom: spacing.xs,
-  },
-  currentBlockType: {
-    fontSize: fontSize.xs,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  blockNameLarge: {
-    fontSize: fontSize.xl,
-    fontWeight: '700',
-    marginBottom: 4,
-  },
-  blockMeta: {
-    fontSize: fontSize.sm,
-  },
-  chipRow: {
-    flexDirection: 'row',
-    gap: 6,
-    marginTop: spacing.md,
-    marginBottom: spacing.xl,
-  },
-  chip: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-  },
-  chipActive: {
-    width: 24,
-    borderRadius: 5,
-  },
+  preStartScroll: { alignItems: 'center', paddingHorizontal: space[16], paddingBottom: 120 },
+  blockList: { width: '100%', gap: space[8] },
+  preStartBlockRow: { flexDirection: 'row', alignItems: 'stretch', borderRadius: radius.md, borderWidth: 1, overflow: 'hidden' },
+  preStartStripe: { width: 3 },
 
-  // ─── Controls ───
-  controls: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xl,
-    marginTop: spacing.lg,
-  },
-  controlBtn: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  mainBtn: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  canvasScroll: { alignItems: 'center', paddingHorizontal: space[16] },
 
-  // ─── V2 Feature styles ───
-  instructionText: {
-    fontSize: fontSize.sm,
-    textAlign: 'center',
-    marginTop: spacing.xs,
-    marginBottom: spacing.xs,
-    paddingHorizontal: spacing.lg,
-  },
-  goalRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: borderRadius.lg,
-    padding: spacing.md,
-    gap: spacing.md,
-    marginTop: spacing.md,
-    width: '100%',
-  },
-  goalBtn: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  goalCenter: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  goalBtnLabel: {
-    fontSize: fontSize.xs,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  goalCountLarge: {
-    fontSize: 40,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
-  },
-  goalCountText: {
-    fontSize: 48,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
-  },
-  goalTargetText: {
-    fontSize: fontSize.md,
-    fontWeight: '500',
-  },
-  todosCard: {
-    borderRadius: borderRadius.lg,
-    padding: spacing.md,
-    marginTop: spacing.md,
-    width: '100%',
-    gap: spacing.xs,
-  },
-  todosSectionTitle: {
-    fontSize: fontSize.xs,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-    marginBottom: 4,
-  },
-  todoLaunchRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    paddingVertical: 6,
-  },
-  todoCheckbox: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    borderWidth: 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  todoLaunchText: {
-    flex: 1,
-    fontSize: fontSize.md,
-  },
-  conditionBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-    borderRadius: borderRadius.md,
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.md,
-    marginTop: spacing.sm,
-  },
-  conditionText: {
-    fontSize: fontSize.sm,
-    fontWeight: '600',
-  },
-  // V2: Feature 3 - Set picker
-  setPickerCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: borderRadius.md,
-    padding: spacing.md,
-    borderWidth: 1,
-  },
-  setPickerName: {
-    fontSize: fontSize.md,
-    fontWeight: '600',
-  },
-  setPickerDesc: {
-    fontSize: fontSize.sm,
-    marginTop: 2,
-  },
+  ringWrap: { marginTop: space[24], marginBottom: space[16], width: RING_SIZE, height: RING_SIZE, alignItems: 'center', justifyContent: 'center' },
+  pulseGlow: { position: 'absolute', width: RING_SIZE - 24, height: RING_SIZE - 24, borderRadius: (RING_SIZE - 24) / 2, borderWidth: 2, opacity: 0.25 },
+  timerOverlay: { position: 'absolute', alignItems: 'center', justifyContent: 'center' },
+  timerFont: { fontWeight: '800', fontVariant: ['tabular-nums'] as any },
+
+  chipRow: { flexDirection: 'row', gap: space[4], marginBottom: space[16] },
+  chip: { height: 4, width: 8, borderRadius: radius.full },
+
+  goalRow: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.md, borderWidth: 1, overflow: 'hidden', marginBottom: space[16], width: '100%', maxWidth: 280 },
+  goalBtn: { width: 56, height: 56, alignItems: 'center', justifyContent: 'center' },
+  goalCenter: { flex: 1, alignItems: 'center', gap: space[2] },
+
+  conditionBanner: { flexDirection: 'row', alignItems: 'center', gap: space[8], paddingHorizontal: space[12], paddingVertical: space[8], borderRadius: radius.sm, borderWidth: 1, marginBottom: space[16] },
+
+  controlBar: { paddingHorizontal: space[16], paddingTop: space[12], flexDirection: 'row', alignItems: 'center', gap: space[8] },
+  pauseBtn: { flex: 2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: space[8], height: 56, borderRadius: radius.full },
+  ghostBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: space[4], height: 44, borderRadius: radius.md, borderWidth: 1 },
+  filledBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: space[12], height: 56, borderRadius: radius.lg },
+
+  setCard: { flexDirection: 'row', alignItems: 'center', padding: space[16], borderRadius: radius.md },
+
+  // Drawer
+  drawer: { position: 'absolute', bottom: 0, left: 0, right: 0, borderTopWidth: 1, borderRadius: radius.lg, overflow: 'hidden' },
+  drawerHandle: { alignItems: 'center', paddingTop: space[8], paddingBottom: space[4] },
+  handleBar: { width: 32, height: 4, borderRadius: radius.full },
+  iconRow: { flexDirection: 'row', justifyContent: 'center', gap: space[24], paddingHorizontal: space[16], paddingBottom: space[8] },
+  iconBtn: { padding: space[8] },
+  iconBadge: { position: 'absolute', top: -4, right: -4, width: 16, height: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  drawerScroll: { flex: 1 },
+  drawerContent: { padding: space[16], gap: space[20] },
+  drawerSection: { gap: space[8] },
+  drawerSectionLabel: { letterSpacing: 0.5 },
+  todoRow: { flexDirection: 'row', alignItems: 'center', gap: space[12], paddingVertical: space[4] },
+  todoCircle: { width: 20, height: 20, borderRadius: 10, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  strikethrough: { textDecorationLine: 'line-through' },
+  notesInput: { borderWidth: 1, borderRadius: radius.md, padding: space[12], minHeight: 80, fontSize: typography.body.fontSize },
 });

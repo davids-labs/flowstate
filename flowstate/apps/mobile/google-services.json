@@ -33,6 +33,35 @@
           ]
         }
       }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:693723347422:android:2b487fba4653cff3c7454f",
+        "android_client_info": {
+          "package_name": "com.davidslabs.flowstate"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "693723347422-akp5cv832dlhd35pqrdtag5bihh7urtm.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAdSg6Pt1RCRo8i_ofDXH8_6jUkFXdaXm0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "693723347422-akp5cv832dlhd35pqrdtag5bihh7urtm.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
     }
   ],
   "configuration_version": "1"

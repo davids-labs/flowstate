@@ -1,26 +1,50 @@
 import React from 'react';
-import { ScrollView, StyleSheet, ViewStyle } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { spacing } from '../../constants/theme';
+import { ScrollView, StyleSheet, View, ViewStyle, RefreshControl } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { space } from '../../constants/theme';
 import { useTheme } from '../../constants/ThemeContext';
 
 interface ScreenWrapperProps {
   children: React.ReactNode;
+  /** Wrap content in a ScrollView (default: true) */
   scrollable?: boolean;
+  /** Remove all padding — for immersive full-bleed screens */
+  noPadding?: boolean;
+  /** Edges to apply safe area insets to (default: all) */
+  edges?: ('top' | 'bottom' | 'left' | 'right')[];
   style?: ViewStyle;
+  contentStyle?: ViewStyle;
+  /** Pull-to-refresh callback */
+  onRefresh?: () => void;
+  refreshing?: boolean;
 }
 
-export function ScreenWrapper({ children, scrollable = true, style }: ScreenWrapperProps) {
-  const { themeColors } = useTheme();
-  const bgStyle = { backgroundColor: themeColors.background };
+export function ScreenWrapper({
+  children,
+  scrollable = true,
+  noPadding = false,
+  edges,
+  style,
+  contentStyle,
+  onRefresh,
+  refreshing = false,
+}: ScreenWrapperProps) {
+  const { themeTokens } = useTheme();
+  const bgStyle = { backgroundColor: themeTokens.background };
+  const padding = noPadding ? {} : { padding: space[16], paddingBottom: space[48] };
 
   if (scrollable) {
     return (
-      <SafeAreaView style={[styles.safe, bgStyle]}>
+      <SafeAreaView style={[styles.safe, bgStyle, style]} edges={edges}>
         <ScrollView
           style={styles.scroll}
-          contentContainerStyle={[styles.content, style]}
+          contentContainerStyle={[padding, contentStyle]}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            onRefresh
+              ? <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={themeTokens.accent} />
+              : undefined
+          }
         >
           {children}
         </ScrollView>
@@ -29,8 +53,10 @@ export function ScreenWrapper({ children, scrollable = true, style }: ScreenWrap
   }
 
   return (
-    <SafeAreaView style={[styles.safe, styles.content, bgStyle, style]}>
-      {children}
+    <SafeAreaView style={[styles.safe, bgStyle, style]} edges={edges}>
+      <View style={[styles.fill, padding, contentStyle]}>
+        {children}
+      </View>
     </SafeAreaView>
   );
 }
@@ -42,8 +68,7 @@ const styles = StyleSheet.create({
   scroll: {
     flex: 1,
   },
-  content: {
-    padding: spacing.md,
-    paddingBottom: spacing.xxl,
+  fill: {
+    flex: 1,
   },
 });

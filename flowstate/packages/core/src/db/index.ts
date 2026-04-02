@@ -7,3 +7,4 @@ export * from './schedules';
 export * from './streaks';
 export * from './reminders';
 export * from './backup';
+export * from './trackers';

@@ -1,212 +1,87 @@
-/**
- * BentoComingUp (Feature: Homescreen Overhaul - Zone 5)
- *
- * Horizontal scroll showing the next 3 days as Bento-style cards.
- * Each card shows: date label, up to 3 priority items (sessions first,
- * then high-priority tasks), then a muted remainder count.
- *
- * Tapping a day card navigates to the Day screen for that date.
+﻿/**
+ * BentoComingUp — V2 spec §1.6
+ * Horizontal scroll of upcoming-day cards. 220pt wide, 40pt right peek.
  */
-
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  View,
-  Text,
-  Pressable,
-  StyleSheet,
-  FlatList,
-  Dimensions,
-} from 'react-native';
-import { useRouter, useFocusEffect } from 'expo-router';
-import { fontSize, spacing, borderRadius } from '../../constants/theme';
+import React from 'react';
+import { View, Pressable, ScrollView, StyleSheet } from 'react-native';
+import { Feather } from '@expo/vector-icons';
+import { AppText } from '../primitives/Text';
+import { space, radius } from '../../constants/theme';
 import { useTheme } from '../../constants/ThemeContext';
-import { useDatabaseSafe } from '../DatabaseProvider';
-import { getDayPlan, getSessionsForDay, getTasks, MidnightWatcher } from '@flowstate/core';
+import { useUserPrefsStore, type Pillar } from '../../stores/userPrefsStore';
 
 const CARD_WIDTH = 220;
-const CARD_GAP = spacing.sm;
+const MAX_VISIBLE = 3;
 
-const PILLAR_COLORS: Record<string, string> = {
-  gym: '#ef4444',
-  academic: '#3b82f6',
-  life: '#22c55e',
-  general: '#a855f7',
-};
+interface SessionPreview { id: string; name: string; pillar: string; scheduledTime?: string | null; durationMinutes?: number; }
+interface DayCard { dateLabel: string; isoDate: string; sessions: SessionPreview[]; }
+interface Props { days: DayCard[]; onDayPress?: (isoDate: string) => void; }
 
-interface DayItem {
-  type: 'session' | 'task';
-  label: string;
-  pillar?: string;
-  time?: string;
+function fmtTime(t?: string | null): string {
+  if (!t) return '';
+  const [h, m] = t.split(':');
+  const hr = parseInt(h, 10);
+  return `${hr % 12 || 12}:${m ?? '00'}${hr >= 12 ? 'pm' : 'am'}`;
 }
 
-interface DayCard {
-  dateStr: string;        // 'YYYY-MM-DD'
-  displayLabel: string;  // 'Tomorrow', 'Wed 12 Mar', etc.
-  items: DayItem[];
-  totalCount: number;
-}
-
-function formatDayLabel(dateStr: string): string {
-  const d = new Date(dateStr + 'T00:00:00');
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const diff = Math.round((d.getTime() - today.getTime()) / 86400000);
-  if (diff === 1) return 'Tomorrow';
-  return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
-}
-
-export function BentoComingUp() {
-  const { themeColors } = useTheme();
-  const router = useRouter();
-  const { db } = useDatabaseSafe();
-  const [days, setDays] = useState<DayCard[]>([]);
-
-  const load = useCallback(async () => {
-    if (!db) return;
-    const today = new Date();
-    const cards: DayCard[] = [];
-    for (let offset = 1; offset <= 3; offset++) {
-      const d = new Date(today);
-      d.setDate(today.getDate() + offset);
-      const dateStr = d.toISOString().slice(0, 10);
-      const items: DayItem[] = [];
-
-      try {
-        const plan = await getDayPlan(db, dateStr);
-        if (plan?.id) {
-          const sess = await getSessionsForDay(db, plan.id);
-          for (const s of sess.slice(0, 5)) {
-            items.push({
-              type: 'session',
-              label: s.routineName,
-              pillar: (s as any).pillar ?? 'general',
-              time: s.scheduledTime ?? undefined,
-            });
-          }
-        }
-      } catch {}
-
-      try {
-        const tasks = await getTasks(db);
-        const due = tasks.filter((t: any) => t.dueDate === dateStr && !t.completedAt);
-        for (const t of due.slice(0, 3)) {
-          items.push({ type: 'task', label: t.title, pillar: t.pillar ?? 'general' });
-        }
-      } catch {}
-
-      cards.push({
-        dateStr,
-        displayLabel: formatDayLabel(dateStr),
-        items: items.slice(0, 3),
-        totalCount: items.length,
-      });
-    }
-    setDays(cards);
-  }, [db]);
-
-  useFocusEffect(useCallback(() => { load(); }, [load]));
-
-  // BUG-16: Re-fetch when the date rolls past midnight while the app is open.
-  useEffect(() => {
-    const watcher = new MidnightWatcher(() => {
-      load();
-    });
-    watcher.start();
-    return () => watcher.stop();
-  }, [load]);
-
-  if (days.length === 0) return null;
-
+function DayBentoCard({ day, onPress }: { day: DayCard; onPress: () => void }) {
+  const { themeTokens } = useTheme();
+  const { getPillarColour } = useUserPrefsStore();
+  const visible = day.sessions.slice(0, MAX_VISIBLE);
+  const extra = day.sessions.length - MAX_VISIBLE;
   return (
-    <View style={styles.section}>
-      <Text style={[styles.sectionTitle, { color: themeColors.muted }]}>COMING UP</Text>
-      <FlatList<DayCard>
-        data={days}
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        snapToInterval={CARD_WIDTH + CARD_GAP}
-        decelerationRate="fast"
-        contentContainerStyle={{ paddingRight: CARD_WIDTH * 0.18, gap: CARD_GAP }}
-        keyExtractor={(item: DayCard) => item.dateStr}
-        renderItem={({ item }: { item: DayCard }) => (
-          <Pressable
-            style={[styles.card, { backgroundColor: themeColors.surface, width: CARD_WIDTH }]}
-            onPress={() => router.push(`/day/${item.dateStr}`)}
-          >
-            <Text style={[styles.dateLabel, { color: themeColors.text }]}>{item.displayLabel}</Text>
-            {item.items.length === 0 ? (
-              <Text style={[styles.emptyText, { color: themeColors.muted }]}>Nothing planned</Text>
-            ) : (
-              item.items.map((it: DayItem, idx: number) => (
-                <View key={idx} style={styles.itemRow}>
-                  <View style={[styles.pillarDot, { backgroundColor: PILLAR_COLORS[it.pillar ?? 'general'] }]} />
-                  <Text style={[styles.itemLabel, { color: themeColors.text }]} numberOfLines={1}>
-                    {it.label}
-                  </Text>
-                  {!!it.time && (
-                    <Text style={[styles.itemTime, { color: themeColors.muted }]}>{it.time}</Text>
-                  )}
-                </View>
-              ))
-            )}
-            {item.totalCount > 3 && (
-              <Text style={[styles.moreText, { color: themeColors.muted }]}>
-                + {item.totalCount - 3} more
-              </Text>
-            )}
-          </Pressable>
-        )}
-      />
+    <Pressable style={[S.card, { backgroundColor: themeTokens.surfaceElevated, borderColor: themeTokens.border }]} onPress={onPress}>
+      {/* Date header */}
+      <AppText variant="title3" style={{ fontWeight: '700' }}>{day.dateLabel}</AppText>
+      <View style={{ height: space[8] }} />
+      {/* Session rows */}
+      {visible.map(s => {
+        const fill = getPillarColour(s.pillar as Pillar);
+        return (
+          <View key={s.id} style={[S.sessionRow, { backgroundColor: themeTokens.surface, borderColor: themeTokens.border }]}>
+            <View style={[S.stripe, { backgroundColor: fill }]} />
+            <View style={S.nameBlock}>
+              <AppText variant="footnote" numberOfLines={1} style={{ fontWeight: '600' }}>{s.name}</AppText>
+              <AppText variant="caption2" color={themeTokens.textSecondary}>
+                {[s.scheduledTime ? fmtTime(s.scheduledTime) : null, s.durationMinutes ? `${s.durationMinutes}m` : null].filter(Boolean).join(' · ') || '\u00A0'}
+              </AppText>
+            </View>
+          </View>
+        );
+      })}
+      {extra > 0 && <AppText variant="footnote" color={themeTokens.textTertiary} style={{ marginTop: space[4] }}>+ {extra} more</AppText>}
+      {day.sessions.length === 0 && (
+        <View style={[S.emptyCard, { borderColor: themeTokens.border }]}>
+          <Feather name="sun" size={16} color={themeTokens.textTertiary} />
+          <AppText variant="footnote" color={themeTokens.textTertiary}>Nothing planned</AppText>
+        </View>
+      )}
+    </Pressable>
+  );
+}
+
+export function BentoComingUp({ days, onDayPress }: Props) {
+  const { themeTokens } = useTheme();
+  if (!days || days.length === 0) return null;
+  return (
+    <View>
+      <AppText variant="subheadline" color={themeTokens.textSecondary} style={S.sectionLabel}>COMING UP</AppText>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={S.scroll} snapToInterval={CARD_WIDTH + space[12]} decelerationRate="fast">
+        {days.map(day => (
+          <DayBentoCard key={day.isoDate} day={day} onPress={() => onDayPress?.(day.isoDate)} />
+        ))}
+        <View style={{ width: 40 }} />
+      </ScrollView>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  section: {
-    marginBottom: spacing.md,
-  },
-  sectionTitle: {
-    fontSize: fontSize.xs,
-    fontWeight: '700',
-    letterSpacing: 0.8,
-    marginBottom: spacing.sm,
-  },
-  card: {
-    borderRadius: borderRadius.lg,
-    padding: spacing.md,
-    gap: spacing.xs,
-  },
-  dateLabel: {
-    fontSize: fontSize.md,
-    fontWeight: '700',
-    marginBottom: spacing.xs,
-  },
-  itemRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-  },
-  pillarDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    flexShrink: 0,
-  },
-  itemLabel: {
-    flex: 1,
-    fontSize: fontSize.sm,
-  },
-  itemTime: {
-    fontSize: fontSize.xs,
-    flexShrink: 0,
-  },
-  moreText: {
-    fontSize: fontSize.xs,
-    marginTop: 4,
-  },
-  emptyText: {
-    fontSize: fontSize.sm,
-    fontStyle: 'italic',
-  },
+const S = StyleSheet.create({
+  sectionLabel: { paddingHorizontal: space[16], paddingBottom: space[8], letterSpacing: 0.5 },
+  scroll: { paddingHorizontal: space[16], gap: space[12] },
+  card: { width: CARD_WIDTH, borderRadius: radius.lg, borderWidth: 1, padding: space[16], gap: space[4] },
+  sessionRow: { flexDirection: 'row', borderRadius: radius.sm, borderWidth: 1, overflow: 'hidden', marginBottom: space[4], height: 44, alignItems: 'stretch' },
+  stripe: { width: 3 },
+  nameBlock: { flex: 1, paddingHorizontal: space[8], justifyContent: 'center', gap: 2 },
+  emptyCard: { borderRadius: radius.sm, borderWidth: 1, borderStyle: 'dashed', paddingVertical: space[12], alignItems: 'center', gap: space[4], flexDirection: 'row', justifyContent: 'center' },
 });

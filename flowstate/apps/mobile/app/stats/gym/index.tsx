@@ -1,98 +1,321 @@
 /**
- * Feature 9 - Gym Volume & PR Dashboard
+ * Gym Stats Screen — V2 spec §9.2
  *
- * Main gym stats screen with three tabs:
- * - Volume: weekly volume per lift (sets × reps × weight) over 8 weeks
- * - PRs: all-time personal record per lift + estimated 1RM (Epley formula)
- * - Frequency: session count heatmap for past year
- *
- * Data source: DataInput module values from gym sessions where the module
- * config has a primaryLift field. (liftTag on routineBlocks also feeds this.)
- *
- * For now, renders a clean placeholder UI that shows data structure —
- * the lift-tagging pipeline (Feature 9 prerequisite) populates it over time.
+ * Three tabs: Volume · PRs · Frequency
+ * Summary card with 4pt pillar-colour top stripe per tab.
+ * Plate Calc shortcut in header top-right.
  */
-
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View,
-  Text,
   Pressable,
   StyleSheet,
   ScrollView,
   ActivityIndicator,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
-import { fontSize, spacing, borderRadius } from '../../../constants/theme';
+import { space, radius } from '../../../constants/theme';
 import { useTheme } from '../../../constants/ThemeContext';
+import { AppText } from '../../../components/primitives/Text';
 import { useDatabaseSafe } from '../../../components/DatabaseProvider';
-import { getVolumeByLift, getPRsAllLifts, getGymSessionFrequency } from '@flowstate/core';
+import { useUserPrefsStore } from '../../../stores/userPrefsStore';
+import {
+  getVolumeByLift,
+  getPRsAllLifts,
+  getGymSessionFrequency,
+} from '@flowstate/core';
 
 type Tab = 'volume' | 'prs' | 'frequency';
 
-/** Epley formula for estimated 1RM: weight × (1 + reps / 30) */
 function epley(weight: number, reps: number): number {
-  if (reps === 1) return weight;
+  if (reps <= 1) return weight;
   return Math.round(weight * (1 + reps / 30));
 }
 
-function getLastNWeeks(n: number): string[] {
-  const weeks: string[] = [];
-  const today = new Date();
-  for (let i = n - 1; i >= 0; i--) {
-    const d = new Date(today);
-    d.setDate(today.getDate() - i * 7);
-    weeks.push(d.toISOString().slice(0, 10).slice(0, 7)); // 'YYYY-MM'
-  }
-  return weeks;
+// ─── Mini horizontal bar ──────────────────────────────────────────────────────
+function MiniBar({
+  value,
+  max,
+  color,
+}: {
+  value: number;
+  max: number;
+  color: string;
+}) {
+  const { themeTokens } = useTheme();
+  const pct = max > 0 ? Math.min(value / max, 1) : 0;
+  return (
+    <View
+      style={{
+        height: 6,
+        borderRadius: 3,
+        overflow: 'hidden',
+        flex: 1,
+        backgroundColor: themeTokens.accentTint ?? themeTokens.surface,
+      }}
+    >
+      <View
+        style={{
+          width: `${pct * 100}%` as any,
+          height: '100%',
+          borderRadius: 3,
+          backgroundColor: color,
+        }}
+      />
+    </View>
+  );
 }
 
+// ─── Summary card ─────────────────────────────────────────────────────────────
+function SummaryCard({
+  title,
+  value,
+  sub,
+  color,
+}: {
+  title: string;
+  value: string;
+  sub: string;
+  color: string;
+}) {
+  const { themeTokens } = useTheme();
+  return (
+    <View
+      style={[
+        SC.card,
+        {
+          backgroundColor: themeTokens.surfaceElevated,
+          borderColor: themeTokens.border,
+        },
+      ]}
+    >
+      <View style={[SC.stripe, { backgroundColor: color }]} />
+      <View style={SC.body}>
+        <AppText variant="footnote" color={themeTokens.textTertiary}>
+          {title}
+        </AppText>
+        <AppText
+          variant="title1"
+          style={{ fontWeight: '800', color: themeTokens.textPrimary }}
+        >
+          {value}
+        </AppText>
+        <AppText
+          variant="footnote"
+          color={themeTokens.textSecondary}
+          style={{ marginTop: space[4] }}
+        >
+          {sub}
+        </AppText>
+      </View>
+    </View>
+  );
+}
+const SC = StyleSheet.create({
+  card: {
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    overflow: 'hidden',
+    marginHorizontal: space[16],
+    marginBottom: space[20],
+  },
+  stripe: { height: 4 },
+  body: { padding: space[16] },
+});
+
+// ─── Tab bar ──────────────────────────────────────────────────────────────────
+function TabBar({
+  tab,
+  onChange,
+  color,
+}: {
+  tab: Tab;
+  onChange: (t: Tab) => void;
+  color: string;
+}) {
+  const { themeTokens } = useTheme();
+  const tabs: { key: Tab; label: string }[] = [
+    { key: 'volume', label: 'Volume' },
+    { key: 'prs', label: 'PRs' },
+    { key: 'frequency', label: 'Frequency' },
+  ];
+  return (
+    <View
+      style={[
+        TB.wrap,
+        {
+          backgroundColor: themeTokens.surface,
+          borderColor: themeTokens.border,
+        },
+      ]}
+    >
+      {tabs.map((t) => (
+        <Pressable
+          key={t.key}
+          style={[TB.btn, tab === t.key && { backgroundColor: color }]}
+          onPress={() => onChange(t.key)}
+        >
+          <AppText
+            variant="subheadline"
+            style={{
+              fontWeight: '600',
+              color: tab === t.key ? '#fff' : themeTokens.textSecondary,
+            }}
+          >
+            {t.label}
+          </AppText>
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+const TB = StyleSheet.create({
+  wrap: {
+    flexDirection: 'row',
+    marginHorizontal: space[16],
+    marginBottom: space[16],
+    borderRadius: radius.md,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  btn: { flex: 1, paddingVertical: 10, alignItems: 'center' },
+});
+
+// ─── Frequency heatmap ────────────────────────────────────────────────────────
+function FrequencyHeatmap({
+  data,
+  color,
+}: {
+  data: Record<string, number>;
+  color: string;
+}) {
+  const { themeTokens } = useTheme();
+  const cells = useMemo(() => {
+    const today = new Date();
+    const days: Array<{ key: string; count: number }> = [];
+    for (let i = 364; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      const iso = d.toISOString().slice(0, 10);
+      days.push({ key: iso, count: data[iso] ?? 0 });
+    }
+    return days;
+  }, [data]);
+  // Use reduce instead of spread-into-Math.max to avoid stack issues on large arrays.
+  const max = cells.reduce((m, c) => Math.max(m, c.count), 1);
+
+  return (
+    <View style={{ paddingHorizontal: space[16] }}>
+      <AppText
+        variant="caption1"
+        color={themeTokens.textTertiary}
+        style={{ marginBottom: space[8] }}
+      >
+        LAST 52 WEEKS
+      </AppText>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 2 }}>
+        {cells.map((c, i) => (
+          <View
+            key={`${c.key}${i}`}
+            style={{
+              width: 10,
+              height: 10,
+              borderRadius: 2,
+              backgroundColor: c.count > 0 ? color : themeTokens.surface,
+              opacity: c.count > 0 ? 0.4 + 0.6 * (c.count / max) : 1,
+            }}
+          />
+        ))}
+      </View>
+      <View
+        style={{
+          flexDirection: 'row',
+          justifyContent: 'flex-end',
+          alignItems: 'center',
+          gap: space[8],
+          marginTop: space[8],
+        }}
+      >
+        <AppText variant="caption2" color={themeTokens.textTertiary}>
+          Less
+        </AppText>
+        {[0.2, 0.4, 0.6, 0.8, 1].map((o) => (
+          <View
+            key={o}
+            style={{
+              width: 10,
+              height: 10,
+              borderRadius: 2,
+              backgroundColor: color,
+              opacity: o,
+            }}
+          />
+        ))}
+        <AppText variant="caption2" color={themeTokens.textTertiary}>
+          More
+        </AppText>
+      </View>
+    </View>
+  );
+}
+
+// ─── Main screen ──────────────────────────────────────────────────────────────
 export default function GymStatsScreen() {
-  const { themeColors } = useTheme();
+  const { themeTokens } = useTheme();
   const router = useRouter();
   const { db } = useDatabaseSafe();
+  const insets = useSafeAreaInsets();
+  const getPillarColour = useUserPrefsStore((s) => s.getPillarColour);
+  const gymColor = getPillarColour('gym');
 
   const [tab, setTab] = useState<Tab>('volume');
   const [loading, setLoading] = useState(true);
   const [sessionCount, setSessionCount] = useState(0);
-  const [volumeData, setVolumeData] = useState<Array<{ primaryLift: string; date: string; totalVolume: number }>>([]);
-  const [prData, setPrData] = useState<Array<{ moduleId: string; primaryLift: string; maxValue: number; date: string }>>([]);
-  const [frequencyData, setFrequencyData] = useState<Record<string, number>>({});
   const [weeklyCount, setWeeklyCount] = useState(0);
+  const [volumeData, setVolumeData] = useState<
+    Array<{ primaryLift: string; date: string; totalVolume: number }>
+  >([]);
+  const [prData, setPrData] = useState<
+    Array<{
+      moduleId: string;
+      primaryLift: string;
+      maxValue: number;
+      date: string;
+    }>
+  >([]);
+  const [freqDayMap, setFreqDayMap] = useState<Record<string, number>>({});
 
   const load = useCallback(async () => {
     if (!db) return;
     setLoading(true);
     try {
-      // Volume by lift
-      const vol = await getVolumeByLift(db);
+      const [vol, prs, freq] = await Promise.all([
+        getVolumeByLift(db),
+        getPRsAllLifts(db),
+        getGymSessionFrequency(db),
+      ]);
       setVolumeData(vol);
-
-      // PRs
-      const prs = await getPRsAllLifts(db);
       setPrData(prs);
-
-      // Frequency
-      const freq = await getGymSessionFrequency(db);
-      const total = freq.reduce((s, f) => s + f.count, 0);
+      const total = (freq as any[]).reduce((s: number, f: any) => s + f.count, 0);
       setSessionCount(total);
 
-      // Current week count
       const now = new Date();
       const oneJan = new Date(now.getFullYear(), 0, 1);
-      const weekNum = Math.ceil(((now.getTime() - oneJan.getTime()) / 86400000 + oneJan.getDay() + 1) / 7);
+      const weekNum = Math.ceil(
+        ((now.getTime() - oneJan.getTime()) / 86400000 + oneJan.getDay() + 1) / 7,
+      );
       const currentWeek = `${now.getFullYear()}-W${String(weekNum).padStart(2, '0')}`;
-      const thisWeek = freq.find(f => f.week === currentWeek);
-      setWeeklyCount(thisWeek?.count ?? 0);
+      setWeeklyCount(
+        (freq as any[]).find((f: any) => f.week === currentWeek)?.count ?? 0,
+      );
 
-      // Build day-level frequency map for heatmap
       const dayMap: Record<string, number> = {};
-      for (const f of freq) {
-        // Approximate — map week to a date for heatmap (use week start Monday)
+      for (const f of freq as any[]) {
         dayMap[f.week] = f.count;
       }
-      setFrequencyData(dayMap);
+      setFreqDayMap(dayMap);
     } catch (e) {
       console.error('GymStats load error:', e);
     } finally {
@@ -100,332 +323,354 @@ export default function GymStatsScreen() {
     }
   }, [db]);
 
-  useFocusEffect(useCallback(() => { load(); }, [load]));
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load]),
+  );
 
-  const weeks = getLastNWeeks(8);
+  const liftGroups = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const v of volumeData) {
+      m[v.primaryLift] = (m[v.primaryLift] ?? 0) + v.totalVolume;
+    }
+    return Object.entries(m)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10);
+  }, [volumeData]);
+  const maxVolume = Math.max(...liftGroups.map(([, v]) => v), 1);
+  // Compute once — was called twice in JSX causing double traversal.
+  const totalVolume = liftGroups.reduce((s, [, v]) => s + v, 0);
 
   return (
-    <View style={[styles.container, { backgroundColor: themeColors.background }]}>
+    <View style={{ flex: 1, backgroundColor: themeTokens.background }}>
       {/* Header */}
-      <View style={styles.header}>
-        <Pressable onPress={() => router.canGoBack() ? router.back() : router.replace('/(tabs)')}>
-          <Feather name="arrow-left" size={22} color={themeColors.text} />
+      <View
+        style={[
+          HDR.wrap,
+          {
+            paddingTop: insets.top + space[8],
+            backgroundColor: themeTokens.background,
+            borderBottomColor: themeTokens.border,
+          },
+        ]}
+      >
+        <Pressable
+          onPress={() =>
+            router.canGoBack() ? router.back() : router.replace('/(tabs)')
+          }
+          hitSlop={12}
+        >
+          <Feather name="arrow-left" size={22} color={themeTokens.textPrimary} />
         </Pressable>
-        <Text style={[styles.title, { color: themeColors.text }]}>🏋️ Gym Stats</Text>
-        <Pressable onPress={() => router.push('/tools/plate-calculator')}>
-          <Feather name="tool" size={20} color={themeColors.accent} />
+        <AppText
+          variant="title1"
+          style={{ fontWeight: '700', flex: 1, marginLeft: space[12] }}
+        >
+          Gym Stats
+        </AppText>
+        <Pressable
+          style={[HDR.calcBtn, { backgroundColor: gymColor }]}
+          onPress={() => router.push('/tools/plate-calculator')}
+        >
+          <Feather name="tool" size={16} color="#fff" />
+          <AppText variant="caption1" style={{ fontWeight: '600', color: '#fff' }}>
+            Plate Calc
+          </AppText>
         </Pressable>
       </View>
 
-      {/* Tab bar */}
-      <View style={[styles.tabBar, { backgroundColor: themeColors.surface }]}>
-        {(['volume', 'prs', 'frequency'] as Tab[]).map((t) => (
-          <Pressable
-            key={t}
-            style={[styles.tab, tab === t && { borderBottomColor: themeColors.accent, borderBottomWidth: 2 }]}
-            onPress={() => setTab(t)}
-          >
-            <Text style={[styles.tabText, { color: tab === t ? themeColors.accent : themeColors.muted }]}>
-              {t === 'volume' ? 'Volume' : t === 'prs' ? 'PRs' : 'Frequency'}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
+      {loading ? (
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+          <ActivityIndicator color={gymColor} />
+        </View>
+      ) : (
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingBottom: insets.bottom + 80 }}
+        >
+          <View style={{ height: space[16] }} />
+          <TabBar tab={tab} onChange={setTab} color={gymColor} />
 
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        {loading ? (
-          <ActivityIndicator color={themeColors.accent} style={{ marginTop: 40 }} />
-        ) : (
-          <>
-            {tab === 'volume' && (
-              <View>
-                <Text style={[styles.sectionTitle, { color: themeColors.text }]}>Weekly Volume (last 8 weeks)</Text>
-                {volumeData.length === 0 ? (
-                  <Text style={[styles.hint, { color: themeColors.muted }]}>
-                    No volume data yet. Create a DataInput module with a primaryLift config field and log your lifts.
-                  </Text>
-                ) : (
-                  <Text style={[styles.hint, { color: themeColors.muted }]}>
-                    Volume per lift from DataInput modules with primaryLift tagging.
-                  </Text>
-                )}
-                {/* Volume bar chart — real data */}
-                <View style={[styles.chartPlaceholder, { backgroundColor: themeColors.surface }]}>
-                  <View style={styles.chartBars}>
-                    {weeks.map((w) => {
-                      const weekVol = volumeData
-                        .filter(v => v.date.startsWith(w))
-                        .reduce((s, v) => s + v.totalVolume, 0);
-                      const maxVol = Math.max(1, ...weeks.map(wk => volumeData.filter(v => v.date.startsWith(wk)).reduce((s, v) => s + v.totalVolume, 0)));
-                      const h = maxVol > 0 ? (weekVol / maxVol) * 80 + 10 : 10;
-                      return (
-                        <View key={w} style={styles.chartBar}>
-                          <View style={[styles.bar, { height: h, backgroundColor: themeColors.accent }]} />
-                          <Text style={[styles.barLabel, { color: themeColors.muted }]}>
-                            {w.slice(5)}
-                          </Text>
-                        </View>
-                      );
-                    })}
-                  </View>
-                  <Text style={[styles.chartYLabel, { color: themeColors.muted }]}>kg·reps (volume)</Text>
-                </View>
-
-                {/* Quick links */}
-                <Pressable
-                  style={[styles.linkRow, { backgroundColor: themeColors.surface }]}
-                  onPress={() => router.push('/tools/plate-calculator')}
+          {/* ── Volume ── */}
+          {tab === 'volume' && (
+            <>
+              <SummaryCard
+                title="Total volume (all time)"
+                value={
+                  totalVolume > 0
+                    ? `${Math.round(totalVolume / 1000)}k kg`
+                    : '—'
+                }
+                sub="Tracked lifts"
+                color={gymColor}
+              />
+              <View style={{ paddingHorizontal: space[16] }}>
+                <AppText
+                  variant="caption1"
+                  color={themeTokens.textTertiary}
+                  style={{ marginBottom: space[8] }}
                 >
-                  <Text style={[styles.linkText, { color: themeColors.text }]}>🧮 Open Plate Calculator</Text>
-                  <Feather name="chevron-right" size={16} color={themeColors.muted} />
-                </Pressable>
-              </View>
-            )}
-
-            {tab === 'prs' && (
-              <View>
-                <Text style={[styles.sectionTitle, { color: themeColors.text }]}>Personal Records</Text>
-
-                {/* Epley 1RM explainer */}
-                <View style={[styles.infoCard, { backgroundColor: themeColors.surface }]}>
-                  <Text style={[styles.infoTitle, { color: themeColors.text }]}>Estimated 1RM Formula</Text>
-                  <Text style={[styles.infoText, { color: themeColors.muted }]}>
-                    Epley: weight × (1 + reps ÷ 30){`\n`}
-                    e.g. 100kg × 5 reps → 1RM ≈ {epley(100, 5)} kg
-                  </Text>
-                </View>
-
-                {prData.length > 0 ? (
-                  prData.map((pr, i) => (
-                    <View key={pr.moduleId ?? i} style={[styles.infoCard, { backgroundColor: themeColors.surface }]}>
-                      <Text style={[styles.infoTitle, { color: themeColors.text }]}>{pr.primaryLift}</Text>
-                      <Text style={[styles.infoText, { color: themeColors.accent }]}>
-                        PR: {pr.maxValue} kg — {pr.date}
-                      </Text>
+                  VOLUME BY LIFT (ALL TIME)
+                </AppText>
+                {liftGroups.length === 0 ? (
+                  <View
+                    style={[
+                      EMPTY.wrap,
+                      {
+                        backgroundColor: themeTokens.surface,
+                        borderColor: themeTokens.border,
+                      },
+                    ]}
+                  >
+                    <Feather
+                      name="bar-chart-2"
+                      size={28}
+                      color={themeTokens.textTertiary}
+                    />
+                    <AppText
+                      variant="body"
+                      color={themeTokens.textTertiary}
+                      style={{ textAlign: 'center', marginTop: space[8] }}
+                    >
+                      {'No lift data yet.\nTag routines with lift names to track volume.'}
+                    </AppText>
+                  </View>
+                ) : (
+                  liftGroups.map(([lift, vol]) => (
+                    <View
+                      key={lift}
+                      style={[
+                        VOL.row,
+                        {
+                          backgroundColor: themeTokens.surfaceElevated,
+                          borderColor: themeTokens.border,
+                        },
+                      ]}
+                    >
+                      <AppText
+                        variant="subheadline"
+                        style={{ flex: 1 }}
+                        numberOfLines={1}
+                      >
+                        {lift}
+                      </AppText>
+                      <MiniBar value={vol} max={maxVolume} color={gymColor} />
+                      <AppText
+                        variant="footnote"
+                        style={{
+                          fontWeight: '600',
+                          color: gymColor,
+                          width: 60,
+                          textAlign: 'right',
+                        }}
+                      >
+                        {vol >= 1000 ? `${(vol / 1000).toFixed(1)}k` : vol} kg
+                      </AppText>
                     </View>
                   ))
-                ) : (
-                  <View style={[styles.emptyState, { backgroundColor: themeColors.surface }]}>
-                    <Text style={[styles.emptyTitle, { color: themeColors.muted }]}>No lifts tracked yet</Text>
-                    <Text style={[styles.emptyHint, { color: themeColors.muted }]}>
-                      Create a DataInput module, add a primaryLift to its config, and log it during your gym sessions.
-                    </Text>
-                  </View>
                 )}
               </View>
-            )}
+            </>
+          )}
 
-            {tab === 'frequency' && (
-              <View>
-                <Text style={[styles.sectionTitle, { color: themeColors.text }]}>Session Frequency (past year)</Text>
-                <Text style={[styles.hint, { color: themeColors.muted }]}>
-                  GitHub-style heatmap of gym session days. Fill colour intensity maps to session count per day.
-                </Text>
-
-                {/* Compact stat row */}
-                <View style={styles.statRow}>
-                  <View style={[styles.statTile, { backgroundColor: themeColors.surface }]}>
-                    <Text style={[styles.statValue, { color: '#ef4444' }]}>{sessionCount}</Text>
-                    <Text style={[styles.statLabel, { color: themeColors.muted }]}>Gym Sessions</Text>
+          {/* ── PRs ── */}
+          {tab === 'prs' && (
+            <>
+              <SummaryCard
+                title="Personal records"
+                value={String(prData.length)}
+                sub="Across all tracked lifts"
+                color={gymColor}
+              />
+              <View style={{ paddingHorizontal: space[16] }}>
+                <AppText
+                  variant="caption1"
+                  color={themeTokens.textTertiary}
+                  style={{ marginBottom: space[8] }}
+                >
+                  RECORDS
+                </AppText>
+                {prData.length === 0 ? (
+                  <View
+                    style={[
+                      EMPTY.wrap,
+                      {
+                        backgroundColor: themeTokens.surface,
+                        borderColor: themeTokens.border,
+                      },
+                    ]}
+                  >
+                    <Feather name="award" size={28} color={themeTokens.textTertiary} />
+                    <AppText
+                      variant="body"
+                      color={themeTokens.textTertiary}
+                      style={{ textAlign: 'center', marginTop: space[8] }}
+                    >
+                      {'No PRs yet.\nLog gym sessions to start tracking personal records.'}
+                    </AppText>
                   </View>
-                  <View style={[styles.statTile, { backgroundColor: themeColors.surface }]}>
-                    <Text style={[styles.statValue, { color: '#ef4444' }]}>{weeklyCount}</Text>
-                    <Text style={[styles.statLabel, { color: themeColors.muted }]}>This Week</Text>
-                  </View>
-                  <View style={[styles.statTile, { backgroundColor: themeColors.surface }]}>
-                    <Text style={[styles.statValue, { color: '#ef4444' }]}>0</Text>
-                    <Text style={[styles.statLabel, { color: themeColors.muted }]}>Streak (days)</Text>
-                  </View>
-                </View>
-
-                {/* Heatmap placeholder */}
-                <View style={[styles.heatmapPlaceholder, { backgroundColor: themeColors.surface }]}>
-                  <View style={styles.heatmapGrid}>
-                    {Array.from({ length: 52 }).map((_, w) => (
-                      <View key={w} style={styles.heatmapWeek}>
-                        {Array.from({ length: 7 }).map((_, d) => (
-                          <View
-                            key={d}
-                            style={[styles.heatmapCell, {
-                              backgroundColor: Math.random() > 0.8
-                                ? '#ef4444' + (Math.random() > 0.5 ? 'cc' : '60')
-                                : themeColors.surfaceBorder,
-                            }]}
-                          />
-                        ))}
+                ) : (
+                  <View
+                    style={{
+                      backgroundColor: themeTokens.surfaceElevated,
+                      borderColor: themeTokens.border,
+                      borderRadius: radius.lg,
+                      borderWidth: 1,
+                      overflow: 'hidden',
+                    }}
+                  >
+                    <View
+                      style={[
+                        PR.headerRow,
+                        { borderBottomColor: themeTokens.border },
+                      ]}
+                    >
+                      <AppText
+                        variant="caption1"
+                        color={themeTokens.textTertiary}
+                        style={{ flex: 2 }}
+                      >
+                        LIFT
+                      </AppText>
+                      <AppText
+                        variant="caption1"
+                        color={themeTokens.textTertiary}
+                        style={{ width: 55, textAlign: 'right' }}
+                      >
+                        WEIGHT
+                      </AppText>
+                      <AppText
+                        variant="caption1"
+                        color={themeTokens.textTertiary}
+                        style={{ width: 60, textAlign: 'right' }}
+                      >
+                        EST 1RM
+                      </AppText>
+                      <AppText
+                        variant="caption1"
+                        color={themeTokens.textTertiary}
+                        style={{ width: 60, textAlign: 'right' }}
+                      >
+                        DATE
+                      </AppText>
+                    </View>
+                    {prData.map((pr, i) => (
+                      <View
+                        key={pr.moduleId}
+                        style={[
+                          PR.row,
+                          i < prData.length - 1 && {
+                            borderBottomWidth: StyleSheet.hairlineWidth,
+                            borderBottomColor: themeTokens.border,
+                          },
+                        ]}
+                      >
+                        <AppText
+                          variant="subheadline"
+                          style={{ flex: 2, fontWeight: '600' }}
+                          numberOfLines={1}
+                        >
+                          {pr.primaryLift}
+                        </AppText>
+                        <AppText
+                          variant="subheadline"
+                          style={{
+                            width: 55,
+                            textAlign: 'right',
+                            color: gymColor,
+                            fontWeight: '700',
+                          }}
+                        >
+                          {pr.maxValue}kg
+                        </AppText>
+                        <AppText
+                          variant="footnote"
+                          color={themeTokens.textSecondary}
+                          style={{ width: 60, textAlign: 'right' }}
+                        >
+                          {epley(pr.maxValue, 1)}kg
+                        </AppText>
+                        <AppText
+                          variant="footnote"
+                          color={themeTokens.textTertiary}
+                          style={{ width: 60, textAlign: 'right' }}
+                        >
+                          {pr.date?.slice(5)}
+                        </AppText>
                       </View>
                     ))}
                   </View>
-                  <Text style={[styles.heatmapNote, { color: themeColors.muted }]}>
-                    Past 52 weeks — gym sessions only
-                  </Text>
-                </View>
+                )}
               </View>
-            )}
-          </>
-        )}
+            </>
+          )}
 
-        <View style={{ height: 40 }} />
-      </ScrollView>
+          {/* ── Frequency ── */}
+          {tab === 'frequency' && (
+            <>
+              <SummaryCard
+                title="Sessions this week"
+                value={String(weeklyCount)}
+                sub={`${sessionCount} total all time`}
+                color={gymColor}
+              />
+              <FrequencyHeatmap data={freqDayMap} color={gymColor} />
+            </>
+          )}
+        </ScrollView>
+      )}
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  header: {
+const HDR = StyleSheet.create({
+  wrap: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing.md,
-    paddingTop: 56,
-    paddingBottom: spacing.sm,
+    paddingHorizontal: space[16],
+    paddingBottom: space[12],
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  title: {
-    fontSize: fontSize.xl,
-    fontWeight: '700',
-  },
-  tabBar: {
-    flexDirection: 'row',
-    marginHorizontal: spacing.md,
-    borderRadius: borderRadius.md,
-    marginBottom: spacing.sm,
-  },
-  tab: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: spacing.sm,
-  },
-  tabText: {
-    fontSize: fontSize.sm,
-    fontWeight: '600',
-  },
-  content: {
-    padding: spacing.md,
-  },
-  sectionTitle: {
-    fontSize: fontSize.lg,
-    fontWeight: '700',
-    marginBottom: spacing.xs,
-  },
-  hint: {
-    fontSize: fontSize.sm,
-    lineHeight: 18,
-    marginBottom: spacing.md,
-  },
-  chartPlaceholder: {
-    borderRadius: borderRadius.lg,
-    padding: spacing.md,
-    marginBottom: spacing.md,
-  },
-  chartBars: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 6,
-    height: 100,
-    marginBottom: spacing.xs,
-  },
-  chartBar: {
-    flex: 1,
-    alignItems: 'center',
-    gap: 4,
-  },
-  bar: {
-    width: '80%',
-    borderRadius: 3,
-    minHeight: 4,
-  },
-  barLabel: {
-    fontSize: 9,
-  },
-  chartYLabel: {
-    fontSize: fontSize.xs,
-    textAlign: 'center',
-    marginTop: 4,
-  },
-  linkRow: {
+  calcBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    borderRadius: borderRadius.md,
-    padding: spacing.md,
-    marginBottom: spacing.sm,
+    gap: space[4],
+    paddingHorizontal: space[12],
+    paddingVertical: space[8],
+    borderRadius: radius.md,
   },
-  linkText: {
-    fontSize: fontSize.md,
-    fontWeight: '600',
-  },
-  infoCard: {
-    borderRadius: borderRadius.md,
-    padding: spacing.md,
-    marginBottom: spacing.md,
-  },
-  infoTitle: {
-    fontWeight: '700',
-    fontSize: fontSize.md,
-    marginBottom: 4,
-  },
-  infoText: {
-    fontSize: fontSize.sm,
-    lineHeight: 20,
-  },
-  emptyState: {
-    borderRadius: borderRadius.lg,
-    padding: spacing.lg,
-    alignItems: 'center',
-    gap: spacing.xs,
-  },
-  emptyTitle: {
-    fontSize: fontSize.md,
-    fontWeight: '600',
-  },
-  emptyHint: {
-    fontSize: fontSize.sm,
-    textAlign: 'center',
-    lineHeight: 18,
-  },
-  statRow: {
+});
+const VOL = StyleSheet.create({
+  row: {
     flexDirection: 'row',
-    gap: spacing.sm,
-    marginBottom: spacing.md,
-  },
-  statTile: {
-    flex: 1,
-    borderRadius: borderRadius.md,
-    padding: spacing.md,
     alignItems: 'center',
-    gap: 4,
+    gap: space[12],
+    padding: space[12],
+    borderRadius: radius.md,
+    borderWidth: 1,
+    marginBottom: space[8],
   },
-  statValue: {
-    fontSize: fontSize.xl,
-    fontWeight: '700',
-  },
-  statLabel: {
-    fontSize: fontSize.xs,
-  },
-  heatmapPlaceholder: {
-    borderRadius: borderRadius.lg,
-    padding: spacing.md,
-  },
-  heatmapGrid: {
+});
+const PR = StyleSheet.create({
+  headerRow: {
     flexDirection: 'row',
-    gap: 2,
-    flexWrap: 'wrap',
+    paddingHorizontal: space[12],
+    paddingVertical: space[8],
+    borderBottomWidth: 1,
   },
-  heatmapWeek: {
-    flexDirection: 'column',
-    gap: 2,
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: space[12],
+    paddingVertical: space[12],
   },
-  heatmapCell: {
-    width: 5,
-    height: 5,
-    borderRadius: 1,
-  },
-  heatmapNote: {
-    fontSize: fontSize.xs,
-    textAlign: 'center',
-    marginTop: spacing.sm,
+});
+const EMPTY = StyleSheet.create({
+  wrap: {
+    borderRadius: radius.md,
+    borderWidth: 1,
+    alignItems: 'center',
+    padding: space[24],
   },
 });

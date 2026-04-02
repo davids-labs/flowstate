@@ -9,11 +9,11 @@ import { useSyncContext } from '../components/SyncProvider';
  */
 export function useModuleValue(moduleId: string) {
   const { db, isReady } = useDatabaseSafe();
-  const { moduleValues, setModuleValue } = useDayStore();
+  const value = useDayStore(
+    (state) => state.moduleValues.find((entry) => entry.moduleId === moduleId)?.value ?? null,
+  );
+  const setModuleValue = useDayStore((state) => state.setModuleValue);
   const { syncModuleValue } = useSyncContext();
-
-  const entry = moduleValues.find(v => v.moduleId === moduleId);
-  const value = entry?.value ?? null;
 
   const setValue = useCallback(
     async (newValue: string) => {

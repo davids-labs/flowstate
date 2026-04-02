@@ -16,4 +16,14 @@ config.resolver.nodeModulesPaths = [
   path.resolve(monorepoRoot, 'node_modules'),
 ];
 
+// 3. Override Expo's auto-detected server root.
+//    Expo sets unstable_serverRoot to the nearest workspace root (monorepoRoot),
+//    which makes --entry-file paths relative to the workspace root.
+//    We set it to the project root so the RN Gradle Plugin's --entry-file ("index.ts")
+//    resolves correctly and expo-router's require.context finds app/ routes.
+config.server = {
+  ...config.server,
+  unstable_serverRoot: projectRoot,
+};
+
 module.exports = config;

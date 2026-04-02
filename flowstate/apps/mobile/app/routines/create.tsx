@@ -1,6 +1,6 @@
 import React, { useState, useRef, useMemo } from 'react';
 import {
-  View, Text, TextInput, Pressable, StyleSheet, Alert, ScrollView, KeyboardAvoidingView, Platform,
+  View, Text, Pressable, StyleSheet, Alert, ScrollView, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -9,6 +9,8 @@ import { useDatabaseSafe } from '../../components/DatabaseProvider';
 import { createRoutine, createRoutineBlock } from '@flowstate/core';
 import { fontSize, spacing, borderRadius } from '../../constants/theme';
 import { useTheme } from '../../constants/ThemeContext';
+import { FormCard, FormChip, FormSection, FormTextField } from '../../components/primitives/Form';
+import { AppText } from '../../components/primitives/Text';
 
 const BLOCK_TYPES = ['focus', 'break', 'warmup', 'cooldown', 'custom'] as const;
 type BlockType = (typeof BLOCK_TYPES)[number];
@@ -128,35 +130,43 @@ export default function CreateRoutineScreen() {
   return (
     <ScreenWrapper scrollable>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-        {/* Name */}
-        <Text style={[styles.label, { color: themeColors.muted }]}>Name</Text>
-        <TextInput
-          style={[styles.input, { backgroundColor: themeColors.surface, color: themeColors.text, borderColor: themeColors.border }]}
-          placeholder="e.g. Morning Deep Work"
-          placeholderTextColor={themeColors.muted}
-          value={name}
-          onChangeText={setName}
-        />
+        <FormSection
+          eyebrow="Session Template"
+          title="Build the flow"
+          description="Give the template a clear name, then shape the timer blocks that make it useful."
+        >
+          <FormTextField
+            label="Name"
+            titleField
+            placeholder="Morning deep work"
+            value={name}
+            onChangeText={setName}
+          />
+          <FormTextField
+            label="Description"
+            placeholder="What is this session template for?"
+            value={description}
+            onChangeText={setDescription}
+            multiline
+          />
+        </FormSection>
 
-        {/* Description */}
-        <Text style={[styles.label, { color: themeColors.muted }]}>Description (optional)</Text>
-        <TextInput
-          style={[styles.input, { minHeight: 60, backgroundColor: themeColors.surface, color: themeColors.text, borderColor: themeColors.border }]}
-          placeholder="What is this routine for?"
-          placeholderTextColor={themeColors.muted}
-          value={description}
-          onChangeText={setDescription}
-          multiline
-        />
+        <FormCard style={{ marginTop: spacing.md }}>
+          <View style={styles.summaryRow}>
+            <AppText variant="footnote" color={themeColors.muted}>
+              {blocks.length} {blocks.length === 1 ? 'block' : 'blocks'}
+            </AppText>
+            <AppText variant="footnote" color={themeColors.muted}>
+              {formatDuration(totalMinutes)} total
+            </AppText>
+          </View>
 
-        {/* Summary */}
-        <View style={styles.summaryRow}>
-          <Text style={[styles.summaryLabel, { color: themeColors.muted }]}>{blocks.length} {blocks.length === 1 ? 'block' : 'blocks'}</Text>
-          <Text style={[styles.summaryLabel, { color: themeColors.muted }]}>{formatDuration(totalMinutes)} total</Text>
-        </View>
-
-        {/* Blocks */}
-        <Text style={[styles.label, { marginTop: spacing.md, color: themeColors.muted }]}>Blocks</Text>
+          <FormSection
+            eyebrow="Blocks"
+            title="Shape the timer"
+            description="Keep the structure crisp so the session is easy to trust once it starts."
+            style={{ marginTop: spacing.sm }}
+          >
         {blocks.map((block, index) => (
           <View key={block.key} style={[styles.blockCard, { backgroundColor: themeColors.surface, borderColor: themeColors.border }]}>
             {/* Type selector */}
@@ -179,12 +189,11 @@ export default function CreateRoutineScreen() {
             </View>
 
             {/* Block name */}
-            <TextInput
-              style={[styles.blockNameInput, { color: themeColors.text, borderBottomColor: themeColors.border }]}
+            <FormTextField
+              label="Block name"
               value={block.name}
               onChangeText={(t) => updateBlock(block.key, { name: t })}
               placeholder="Block name"
-              placeholderTextColor={themeColors.muted}
             />
 
             {/* Duration */}
@@ -207,33 +216,34 @@ export default function CreateRoutineScreen() {
             {/* Type pills */}
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.typePills}>
               {BLOCK_TYPES.map((t) => (
-                <Pressable
+                <FormChip
                   key={t}
-                  style={[styles.pill, { backgroundColor: themeColors.background }, block.type === t && { backgroundColor: themeColors.accent }]}
+                  label={t}
+                  selected={block.type === t}
                   onPress={() => updateBlock(block.key, { type: t })}
-                >
-                  <Text style={[styles.pillText, { color: themeColors.muted }, block.type === t && { color: themeColors.white }]}>{t}</Text>
-                </Pressable>
+                  style={styles.pill}
+                />
               ))}
             </ScrollView>
           </View>
         ))}
 
-        {/* Add block buttons */}
-        <View style={styles.addRow}>
-          <Pressable style={[styles.addBtn, { borderColor: themeColors.border }]} onPress={() => addBlock('focus')}>
-            <Feather name="plus" size={16} color={themeColors.accent} />
-            <Text style={[styles.addBtnText, { color: themeColors.accent }]}>Focus</Text>
-          </Pressable>
-          <Pressable style={[styles.addBtn, { borderColor: themeColors.border }]} onPress={() => addBlock('break')}>
-            <Feather name="coffee" size={16} color={themeColors.success} />
-            <Text style={[styles.addBtnText, { color: themeColors.success }]}>Break</Text>
-          </Pressable>
-          <Pressable style={[styles.addBtn, { borderColor: themeColors.border }]} onPress={() => addBlock('custom')}>
-            <Feather name="zap" size={16} color={themeColors.muted} />
-            <Text style={[styles.addBtnText, { color: themeColors.muted }]}>Custom</Text>
-          </Pressable>
-        </View>
+            <View style={styles.addRow}>
+              <Pressable style={[styles.addBtn, { borderColor: themeColors.border }]} onPress={() => addBlock('focus')}>
+                <Feather name="plus" size={16} color={themeColors.accent} />
+                <Text style={[styles.addBtnText, { color: themeColors.accent }]}>Focus</Text>
+              </Pressable>
+              <Pressable style={[styles.addBtn, { borderColor: themeColors.border }]} onPress={() => addBlock('break')}>
+                <Feather name="coffee" size={16} color={themeColors.success} />
+                <Text style={[styles.addBtnText, { color: themeColors.success }]}>Break</Text>
+              </Pressable>
+              <Pressable style={[styles.addBtn, { borderColor: themeColors.border }]} onPress={() => addBlock('custom')}>
+                <Feather name="zap" size={16} color={themeColors.muted} />
+                <Text style={[styles.addBtnText, { color: themeColors.muted }]}>Custom</Text>
+              </Pressable>
+            </View>
+          </FormSection>
+        </FormCard>
 
         {/* Save */}
         <Pressable
@@ -261,29 +271,10 @@ function formatDuration(mins: number): string {
 }
 
 const styles = StyleSheet.create({
-  label: {
-    fontSize: fontSize.sm,
-    fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: spacing.xs,
-    marginTop: spacing.sm,
-  },
-  input: {
-    borderRadius: borderRadius.md,
-    padding: spacing.md,
-    fontSize: fontSize.md,
-    borderWidth: 1,
-  },
   summaryRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginTop: spacing.md,
     paddingHorizontal: spacing.xs,
-  },
-  summaryLabel: {
-    fontSize: fontSize.sm,
-    fontWeight: '500',
   },
   blockCard: {
     borderRadius: borderRadius.md,
@@ -315,12 +306,6 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     alignItems: 'center',
   },
-  blockNameInput: {
-    fontSize: fontSize.md,
-    fontWeight: '600',
-    paddingVertical: spacing.xs,
-    borderBottomWidth: 1,
-  },
   durationRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -349,15 +334,7 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
   pill: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    borderRadius: borderRadius.xl,
     marginRight: spacing.xs,
-  },
-  pillText: {
-    fontSize: fontSize.xs,
-    fontWeight: '500',
-    textTransform: 'capitalize',
   },
   addRow: {
     flexDirection: 'row',
