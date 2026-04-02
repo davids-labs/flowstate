@@ -3,6 +3,6 @@ import { Redirect, useLocalSearchParams } from 'expo-router';
 
 export default function LegacyModuleRemindersRedirect() {
   const params = useLocalSearchParams<{ moduleId?: string }>();
-  if (!params.moduleId) return <Redirect href="/library" />;
+  if (!params.moduleId) return <Redirect href="/track" />;
   return <Redirect href={{ pathname: '/trackers/[id]', params: { id: String(params.moduleId) } }} />;
 }

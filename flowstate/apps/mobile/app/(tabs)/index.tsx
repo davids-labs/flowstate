@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -17,8 +17,7 @@ import {
 } from '@flowstate/core';
 import { ScreenWrapper } from '../../components/layout/ScreenWrapper';
 import { AppText } from '../../components/primitives/Text';
-import { ActiveBlockWidget } from '../../components/home/ActiveBlockWidget';
-import { PlannerAgenda } from '../../components/planner/PlannerAgenda';
+import { LiveSessionDock } from '../../components/shared/LiveSessionDock';
 import { PlannerSessionSheet } from '../../components/planner/PlannerSessionSheet';
 import { TaskEditor, type TaskFormData } from '../../components/tasks/TaskEditor';
 import { TrackerCard } from '../../components/trackers/TrackerCard';
@@ -26,7 +25,14 @@ import { useDatabaseSafe } from '../../components/DatabaseProvider';
 import { useSyncContext } from '../../components/SyncProvider';
 import { useTheme } from '../../constants/ThemeContext';
 import { radius, space } from '../../constants/theme';
-import { loadPlannerDayBundle, type PlannerDayBundle, type PlannerTracker } from '../../lib/planner';
+import {
+  loadPlannerDayBundle,
+  type PlannerDayBundle,
+  type PlannerTimelineItem,
+  type PlannerTracker,
+} from '../../lib/planner';
+import { getInboxBadgeCount } from '../../services/inbox';
+import { refreshAmbientState } from '../../services/systemSync';
 import { useDayStore } from '../../stores/dayStore';
 
 function todayIso() {
@@ -39,6 +45,131 @@ function formatToday(date: string) {
     month: 'long',
     day: 'numeric',
   });
+}
+
+function formatTimeLabel(value: string | null | undefined) {
+  if (!value) return 'Flexible';
+  return value;
+}
+
+function AgendaLane({
+  title,
+  items,
+  onTaskToggle,
+  onTaskPress,
+  onSessionPress,
+  emptyLabel,
+}: {
+  title: string;
+  items: PlannerTimelineItem[];
+  onTaskToggle: (taskId: string, completed: boolean) => void;
+  onTaskPress: (taskId: string) => void;
+  onSessionPress: (sessionId: string) => void;
+  emptyLabel: string;
+}) {
+  const { themeTokens } = useTheme();
+
+  return (
+    <View style={styles.lane}>
+      <View style={styles.laneHeader}>
+        <AppText variant="caption1" color={themeTokens.textSecondary} style={styles.laneLabel}>
+          {title}
+        </AppText>
+      </View>
+      {items.length === 0 ? (
+        <View style={[styles.emptyLaneCard, { backgroundColor: themeTokens.surface, borderColor: themeTokens.border }]}>
+          <AppText variant="footnote" color={themeTokens.textSecondary}>
+            {emptyLabel}
+          </AppText>
+        </View>
+      ) : (
+        items.map((item) => {
+          const taskDone = item.kind === 'task' ? item.completed : false;
+          return (
+            <Pressable
+              key={item.id}
+              style={[styles.agendaCard, { backgroundColor: themeTokens.surfaceElevated, borderColor: themeTokens.border }]}
+              onPress={() => {
+                if (item.kind === 'task') {
+                  onTaskPress(item.id);
+                  return;
+                }
+                onSessionPress(item.id);
+              }}
+            >
+              <View style={styles.agendaMeta}>
+                <View
+                  style={[
+                    styles.agendaTimeChip,
+                    {
+                      backgroundColor:
+                        item.kind === 'session' ? themeTokens.accentTint : themeTokens.surface,
+                      borderColor: themeTokens.border,
+                    },
+                  ]}
+                >
+                  <AppText
+                    variant="caption1"
+                    color={item.kind === 'session' ? themeTokens.accent : themeTokens.textSecondary}
+                    style={{ fontWeight: '700' }}
+                  >
+                    {formatTimeLabel(item.time)}
+                  </AppText>
+                </View>
+                <AppText variant="caption1" color={themeTokens.textSecondary}>
+                  {item.kind === 'session' ? 'Session' : 'Task'}
+                </AppText>
+              </View>
+
+              <View style={styles.agendaBody}>
+                <View style={styles.agendaCopy}>
+                  <AppText
+                    variant="headline"
+                    color={taskDone ? themeTokens.textTertiary : themeTokens.textPrimary}
+                    style={taskDone ? styles.completedText : undefined}
+                    numberOfLines={2}
+                  >
+                    {item.title}
+                  </AppText>
+                  <AppText variant="footnote" color={themeTokens.textSecondary}>
+                    {item.kind === 'session'
+                      ? item.status === 'completed'
+                        ? 'Completed'
+                        : item.status === 'in_progress'
+                          ? 'In progress'
+                          : 'Ready to run'
+                      : taskDone
+                        ? 'Checked off'
+                        : `Priority ${item.priority}`}
+                  </AppText>
+                </View>
+
+                {item.kind === 'task' ? (
+                  <Pressable
+                    style={[
+                      styles.agendaCheck,
+                      {
+                        borderColor: taskDone ? themeTokens.accent : themeTokens.borderStrong,
+                        backgroundColor: taskDone ? themeTokens.accent : 'transparent',
+                      },
+                    ]}
+                    onPress={(event) => {
+                      event.stopPropagation();
+                      onTaskToggle(item.id, !item.completed);
+                    }}
+                  >
+                    {taskDone ? <Feather name="check" size={12} color="#fff" /> : null}
+                  </Pressable>
+                ) : (
+                  <Feather name="arrow-up-right" size={16} color={themeTokens.textTertiary} />
+                )}
+              </View>
+            </Pressable>
+          );
+        })
+      )}
+    </View>
+  );
 }
 
 export default function TodayScreen() {
@@ -58,12 +189,17 @@ export default function TodayScreen() {
   const [showTaskEditor, setShowTaskEditor] = useState(false);
   const [editingTask, setEditingTask] = useState<Partial<TaskFormData> | undefined>(undefined);
   const [showSessionSheet, setShowSessionSheet] = useState(false);
+  const [inboxCount, setInboxCount] = useState(0);
 
   const loadData = useCallback(async () => {
     if (!db || !isReady) return;
     await loadDay(db, today);
-    const nextBundle = await loadPlannerDayBundle(db, today);
+    const [nextBundle, nextInboxCount] = await Promise.all([
+      loadPlannerDayBundle(db, today),
+      getInboxBadgeCount(db),
+    ]);
     setBundle(nextBundle);
+    setInboxCount(nextInboxCount);
   }, [db, isReady, loadDay, today]);
 
   const handleRefresh = useCallback(async () => {
@@ -81,6 +217,12 @@ export default function TodayScreen() {
   const priorities = dayPlan?.mustDo ?? [];
   const prioritiesDone = dayPlan?.mustDoDone ?? [];
   const completedPriorityCount = prioritiesDone.filter(Boolean).length;
+  const openPriorityCount = priorities.length - completedPriorityCount;
+  const agenda = bundle?.agenda ?? [];
+  const trackerItems = bundle?.trackers ?? [];
+  const nowItems = agenda.slice(0, 1);
+  const nextItems = agenda.slice(1, 3);
+  const laterItems = agenda.slice(3, 7);
 
   const savePriorities = useCallback(async (
     nextMustDo: string[],
@@ -111,6 +253,7 @@ export default function TodayScreen() {
     }
 
     syncDayPlan(today, { mustDo: nextMustDo, mustDoDone: nextDone });
+    await refreshAmbientState(db);
     await loadData();
   }, [db, dayPlan, today, syncDayPlan, loadData]);
 
@@ -179,10 +322,9 @@ export default function TodayScreen() {
       });
     }
     setShowTaskEditor(false);
+    await refreshAmbientState(db);
     await loadData();
   }, [db, today, loadData]);
-
-  const trackerItems = useMemo(() => bundle?.trackers ?? [], [bundle?.trackers]);
 
   if (!bundle && (isLoading || !isReady)) {
     return (
@@ -201,7 +343,7 @@ export default function TodayScreen() {
     <ScreenWrapper onRefresh={handleRefresh} refreshing={refreshing}>
       <View style={styles.hero}>
         <View style={styles.heroCopy}>
-          <AppText variant="title1" style={{ fontWeight: '700' }}>
+          <AppText variant="title1" style={{ fontWeight: '800' }}>
             Today
           </AppText>
           <AppText variant="subheadline" color={themeTokens.textSecondary}>
@@ -210,17 +352,98 @@ export default function TodayScreen() {
         </View>
         <View style={[styles.heroBadge, { backgroundColor: themeTokens.accentTint }]}>
           <AppText variant="caption1" color={themeTokens.accent} style={{ fontWeight: '700' }}>
-            {completedPriorityCount}/{priorities.length || 0} priorities
+            {completedPriorityCount}/{priorities.length || 0} locked in
           </AppText>
         </View>
       </View>
 
-      <ActiveBlockWidget
-        pillar="general"
-        nextSession={bundle?.nextSession ?? null}
-        emptyActionLabel="Add Session"
-        onEmptyActionPress={() => setShowSessionSheet(true)}
-      />
+      <View style={[styles.briefCard, { backgroundColor: themeTokens.surfaceElevated, borderColor: themeTokens.border }]}>
+        <View style={styles.sectionHeader}>
+          <View style={styles.sectionCopy}>
+            <AppText variant="headline" style={{ fontWeight: '700' }}>
+              Morning Brief
+            </AppText>
+            <AppText variant="footnote" color={themeTokens.textSecondary}>
+              Get clear on what matters before the day starts drifting.
+            </AppText>
+          </View>
+          <Pressable
+            style={[styles.roundButton, { backgroundColor: themeTokens.surface, borderColor: themeTokens.border }]}
+            onPress={() => router.push('/inbox')}
+          >
+            <Feather name="inbox" size={16} color={themeTokens.textPrimary} />
+          </Pressable>
+        </View>
+
+        <View style={styles.briefGrid}>
+          <View style={[styles.briefTile, { backgroundColor: themeTokens.surface }]}>
+            <AppText variant="title3" style={{ fontWeight: '800' }}>
+              {openPriorityCount}
+            </AppText>
+            <AppText variant="caption1" color={themeTokens.textSecondary}>
+              priorities left
+            </AppText>
+          </View>
+          <View style={[styles.briefTile, { backgroundColor: themeTokens.surface }]}>
+            <AppText variant="title3" style={{ fontWeight: '800' }}>
+              {inboxCount}
+            </AppText>
+            <AppText variant="caption1" color={themeTokens.textSecondary}>
+              inbox items
+            </AppText>
+          </View>
+          <View style={[styles.briefTileWide, { backgroundColor: themeTokens.surface }]}>
+            <AppText variant="caption1" color={themeTokens.textSecondary}>
+              Next session
+            </AppText>
+            <AppText variant="headline" style={{ fontWeight: '700' }} numberOfLines={1}>
+              {bundle?.nextSession?.routineName ?? 'No session queued'}
+            </AppText>
+            <AppText variant="caption1" color={themeTokens.textSecondary}>
+              {bundle?.nextSession?.scheduledTime ?? 'Add one from Plan or Today'}
+            </AppText>
+          </View>
+        </View>
+
+        <View style={styles.actionRow}>
+          <Pressable
+            style={[styles.primaryButton, { backgroundColor: themeTokens.accent }]}
+            onPress={() => router.push('/inbox')}
+          >
+            <Feather name="arrow-up-right" size={16} color="#fff" />
+            <AppText variant="caption1" onAccent style={{ fontWeight: '700' }}>
+              Open Inbox
+            </AppText>
+          </Pressable>
+          <Pressable
+            style={[styles.secondaryButton, { backgroundColor: themeTokens.surface, borderColor: themeTokens.border }]}
+            onPress={() => router.push('/plan')}
+          >
+            <Feather name="calendar" size={16} color={themeTokens.textPrimary} />
+            <AppText variant="caption1" style={{ fontWeight: '700' }}>
+              Open Plan
+            </AppText>
+          </Pressable>
+        </View>
+      </View>
+
+      <View style={styles.sectionShell}>
+        <View style={styles.sectionHeader}>
+          <View style={styles.sectionCopy}>
+            <AppText variant="headline" style={{ fontWeight: '700' }}>
+              Live Session
+            </AppText>
+            <AppText variant="footnote" color={themeTokens.textSecondary}>
+              One place to run what is active without the old duplicate timer surfaces.
+            </AppText>
+          </View>
+        </View>
+        <LiveSessionDock
+          variant="inline"
+          nextSession={bundle?.nextSession ?? null}
+          onEmptyActionPress={() => setShowSessionSheet(true)}
+        />
+      </View>
 
       <View style={[styles.sectionCard, { backgroundColor: themeTokens.surfaceElevated, borderColor: themeTokens.border }]}>
         <View style={styles.sectionHeader}>
@@ -229,7 +452,7 @@ export default function TodayScreen() {
               Top Priorities
             </AppText>
             <AppText variant="footnote" color={themeTokens.textSecondary}>
-              Keep the day focused on the few things that must happen.
+              Keep the day focused on the few things that really have to happen.
             </AppText>
           </View>
         </View>
@@ -253,7 +476,12 @@ export default function TodayScreen() {
                       backgroundColor: prioritiesDone[index] ? themeTokens.accent : 'transparent',
                     },
                   ]}
-                  onPress={() => db && toggleMustDo(db, index, syncDayPlan)}
+                  onPress={async () => {
+                    if (!db) return;
+                    await toggleMustDo(db, index, syncDayPlan);
+                    await refreshAmbientState(db);
+                    await loadData();
+                  }}
                   hitSlop={8}
                 >
                   {prioritiesDone[index] ? <Feather name="check" size={12} color="#fff" /> : null}
@@ -298,15 +526,15 @@ export default function TodayScreen() {
         <View style={styles.sectionHeader}>
           <View style={styles.sectionCopy}>
             <AppText variant="headline" style={{ fontWeight: '700' }}>
-              Agenda
+              Now, Next, Later
             </AppText>
             <AppText variant="footnote" color={themeTokens.textSecondary}>
-              Tasks and sessions in one timeline for the day.
+              A calmer agenda split into what deserves attention now versus what can wait.
             </AppText>
           </View>
           <View style={styles.actionRow}>
             <Pressable
-              style={[styles.actionButton, { backgroundColor: themeTokens.surface, borderColor: themeTokens.border }]}
+              style={[styles.secondaryButton, { backgroundColor: themeTokens.surface, borderColor: themeTokens.border }]}
               onPress={() => openTaskEditor()}
             >
               <AppText variant="caption1" style={{ fontWeight: '700' }}>
@@ -314,7 +542,7 @@ export default function TodayScreen() {
               </AppText>
             </Pressable>
             <Pressable
-              style={[styles.actionButton, { backgroundColor: themeTokens.surface, borderColor: themeTokens.border }]}
+              style={[styles.secondaryButton, { backgroundColor: themeTokens.surface, borderColor: themeTokens.border }]}
               onPress={() => setShowSessionSheet(true)}
             >
               <AppText variant="caption1" style={{ fontWeight: '700' }}>
@@ -324,17 +552,44 @@ export default function TodayScreen() {
           </View>
         </View>
 
-        <PlannerAgenda
-          items={bundle?.agenda ?? []}
+        <AgendaLane
+          title="Now"
+          items={nowItems}
+          emptyLabel="Nothing pinned right now."
           onTaskToggle={async (taskId, completed) => {
             if (!db) return;
             await updateTask(db, taskId, { completed });
+            await refreshAmbientState(db);
             await loadData();
           }}
           onTaskPress={(taskId) => openTaskEditor(taskId)}
           onSessionPress={(sessionId) => router.push(`/session/${sessionId}` as any)}
-          emptyTitle="Your day is open"
-          emptySubtitle="Start with a task, a session, or a single top priority."
+        />
+        <AgendaLane
+          title="Next"
+          items={nextItems}
+          emptyLabel="No immediate follow-up yet."
+          onTaskToggle={async (taskId, completed) => {
+            if (!db) return;
+            await updateTask(db, taskId, { completed });
+            await refreshAmbientState(db);
+            await loadData();
+          }}
+          onTaskPress={(taskId) => openTaskEditor(taskId)}
+          onSessionPress={(sessionId) => router.push(`/session/${sessionId}` as any)}
+        />
+        <AgendaLane
+          title="Later"
+          items={laterItems}
+          emptyLabel="The back half of the day is still open."
+          onTaskToggle={async (taskId, completed) => {
+            if (!db) return;
+            await updateTask(db, taskId, { completed });
+            await refreshAmbientState(db);
+            await loadData();
+          }}
+          onTaskPress={(taskId) => openTaskEditor(taskId)}
+          onSessionPress={(sessionId) => router.push(`/session/${sessionId}` as any)}
         />
       </View>
 
@@ -342,13 +597,13 @@ export default function TodayScreen() {
         <View style={styles.sectionHeader}>
           <View style={styles.sectionCopy}>
             <AppText variant="headline" style={{ fontWeight: '700' }}>
-              Trackers
+              Quick Log
             </AppText>
             <AppText variant="footnote" color={themeTokens.textSecondary}>
-              Keep the logs you actually need close to the day.
+              Keep the trackers you actually use close to the day instead of buried elsewhere.
             </AppText>
           </View>
-          <Pressable onPress={() => router.push('/library' as any)}>
+          <Pressable onPress={() => router.push('/track' as any)}>
             <AppText variant="caption1" color={themeTokens.accent} style={{ fontWeight: '700' }}>
               Manage
             </AppText>
@@ -367,7 +622,16 @@ export default function TodayScreen() {
         ) : (
           <View style={styles.trackerList}>
             {trackerItems.map((tracker) => (
-              <TrackerCard key={tracker.id} tracker={tracker as PlannerTracker & any} compact onChanged={loadData} />
+              <TrackerCard
+                key={tracker.id}
+                tracker={tracker as PlannerTracker & any}
+                compact
+                onChanged={async () => {
+                  if (!db) return;
+                  await refreshAmbientState(db);
+                  await loadData();
+                }}
+              />
             ))}
           </View>
         )}
@@ -386,7 +650,11 @@ export default function TodayScreen() {
         visible={showSessionSheet}
         date={today}
         onClose={() => setShowSessionSheet(false)}
-        onSaved={loadData}
+        onSaved={async () => {
+          if (!db) return;
+          await refreshAmbientState(db);
+          await loadData();
+        }}
       />
     </ScreenWrapper>
   );
@@ -402,12 +670,38 @@ const styles = StyleSheet.create({
   },
   heroCopy: {
     flex: 1,
-    gap: space[4],
+    gap: 4,
   },
   heroBadge: {
     borderRadius: radius.full,
     paddingHorizontal: space[12],
     paddingVertical: space[8],
+  },
+  briefCard: {
+    borderWidth: 1,
+    borderRadius: radius.xl,
+    padding: space[16],
+    gap: space[16],
+  },
+  briefGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: space[10],
+  },
+  briefTile: {
+    flex: 1,
+    minWidth: 108,
+    borderRadius: radius.lg,
+    paddingHorizontal: space[12],
+    paddingVertical: space[14],
+    gap: 4,
+  },
+  briefTileWide: {
+    width: '100%',
+    borderRadius: radius.lg,
+    paddingHorizontal: space[12],
+    paddingVertical: space[14],
+    gap: 4,
   },
   sectionShell: {
     marginTop: space[24],
@@ -421,9 +715,18 @@ const styles = StyleSheet.create({
   },
   sectionCopy: {
     flex: 1,
-    gap: space[4],
+    gap: 4,
+  },
+  roundButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   sectionCard: {
+    marginTop: space[24],
     borderWidth: 1,
     borderRadius: radius.xl,
     padding: space[16],
@@ -477,13 +780,78 @@ const styles = StyleSheet.create({
   },
   actionRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: space[8],
   },
-  actionButton: {
-    borderWidth: 1,
+  primaryButton: {
+    minHeight: 40,
     borderRadius: radius.full,
+    paddingHorizontal: space[14],
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
+  },
+  secondaryButton: {
+    minHeight: 40,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    paddingHorizontal: space[14],
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
+  },
+  lane: {
+    gap: space[8],
+  },
+  laneHeader: {
+    paddingHorizontal: space[4],
+  },
+  laneLabel: {
+    letterSpacing: 0.7,
+    fontWeight: '700',
+  },
+  emptyLaneCard: {
+    borderWidth: 1,
+    borderRadius: radius.lg,
     paddingHorizontal: space[12],
-    paddingVertical: space[8],
+    paddingVertical: space[12],
+  },
+  agendaCard: {
+    borderWidth: 1,
+    borderRadius: radius.xl,
+    padding: space[14],
+    gap: space[12],
+  },
+  agendaMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: space[12],
+  },
+  agendaTimeChip: {
+    borderRadius: radius.full,
+    borderWidth: 1,
+    paddingHorizontal: space[10],
+    paddingVertical: space[6],
+  },
+  agendaBody: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space[12],
+  },
+  agendaCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  agendaCheck: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   trackerList: {
     gap: space[8],

@@ -7,16 +7,22 @@ import { DatabaseProvider } from "../components/DatabaseProvider";
 import { SyncProvider } from "../components/SyncProvider";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { ThemeProvider, useTheme } from "../constants/ThemeContext";
-import { scheduleDailyReminders } from "../services/notifications";
 import { initializeTimerStore } from "../stores/timerStore";
 import { useUserPrefsStore } from "../stores/userPrefsStore";
-import { FloatingActiveBlockWidget } from "../components/shared/FloatingActiveBlockWidget";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { LiveSessionDock } from "../components/shared/LiveSessionDock";
+import { useDatabaseSafe } from "../components/DatabaseProvider";
+import { refreshAmbientState } from "../services/systemSync";
 
 export default function RootLayout() {
   useEffect(() => {
     // Initialise stores on app startup
-    scheduleDailyReminders().catch(() => {});
-    useUserPrefsStore.getState().loadPrefs().catch(() => {});
+    (async () => {
+      try {
+        await useUserPrefsStore.getState().loadPrefs();
+        await migrateLegacySessionSettings();
+      } catch {}
+    })();
     let cleanup: (() => void) | undefined;
     initializeTimerStore().then((fn) => { cleanup = fn; }).catch(() => {});
     return () => { cleanup?.(); };
@@ -71,19 +77,57 @@ function ThemedStack() {
         <Stack.Screen name="routines/index" options={{ title: "Session Templates" }} />
         <Stack.Screen name="routines/create" options={{ title: "New Session Template" }} />
         <Stack.Screen name="settings" options={{ title: "Settings" }} />
+        <Stack.Screen name="settings/notifications" options={{ title: "Reminders & Automations" }} />
+        <Stack.Screen name="settings/widgets" options={{ title: "Widgets" }} />
         <Stack.Screen name="settings/csv-plans" options={{ title: "Imported Plans" }} />
         <Stack.Screen name="routines/[id]" options={{ title: "Edit Session Template" }} />
         <Stack.Screen name="routine-launcher/[id]" options={{ title: "Routine", headerShown: false }} />
         <Stack.Screen name="layout-editor" options={{ title: "Edit Layout" }} />
         <Stack.Screen name="statistics/index" options={{ title: "Insights" }} />
         <Stack.Screen name="insights/index" options={{ title: "Insights" }} />
-        <Stack.Screen name="more/index" options={{ title: "More" }} />
+        <Stack.Screen name="more/index" options={{ title: "Settings" }} />
         <Stack.Screen name="imported-plans/[id]" options={{ title: "Edit Imported Plan" }} />
         <Stack.Screen name="gallery/index" options={{ title: "Gallery" }} />
         <Stack.Screen name="backup/index" options={{ title: "Backup & Restore" }} />
       </Stack>
-      {/* Floating session widget — persists across all tabs (spec §1.6 + §11.6) */}
-      <FloatingActiveBlockWidget />
+      <AmbientSyncBridge />
+      <LiveSessionDock />
     </View>
   );
+}
+
+function AmbientSyncBridge() {
+  const { db, isReady } = useDatabaseSafe();
+
+  useEffect(() => {
+    if (!db || !isReady) return;
+    refreshAmbientState(db).catch(() => {});
+  }, [db, isReady]);
+
+  return null;
+}
+
+async function migrateLegacySessionSettings() {
+  const rawPrefs = await AsyncStorage.getItem("flowstate_user_prefs").catch(() => null);
+  const savedPrefs = rawPrefs ? JSON.parse(rawPrefs) : null;
+  const store = useUserPrefsStore.getState();
+  const [legacyHaptics, legacyKeepAwake, legacyAutoStart, legacyConfirmDelete] =
+    await Promise.all([
+      AsyncStorage.getItem("setting_haptics").catch(() => null),
+      AsyncStorage.getItem("setting_keep_awake").catch(() => null),
+      AsyncStorage.getItem("setting_auto_start").catch(() => null),
+      AsyncStorage.getItem("setting_confirm_delete").catch(() => null),
+    ]);
+
+  if (legacyHaptics != null && savedPrefs?.hapticFeedback === undefined) store.setHapticFeedback(legacyHaptics === "true");
+  if (legacyKeepAwake != null && savedPrefs?.keepAwake === undefined) store.setKeepAwake(legacyKeepAwake === "true");
+  if (legacyAutoStart != null && savedPrefs?.autoStart === undefined) store.setAutoStart(legacyAutoStart === "true");
+  if (legacyConfirmDelete != null && savedPrefs?.confirmBeforeDelete === undefined) store.setConfirmBeforeDelete(legacyConfirmDelete === "true");
+
+  await Promise.all([
+    AsyncStorage.removeItem("setting_haptics").catch(() => {}),
+    AsyncStorage.removeItem("setting_keep_awake").catch(() => {}),
+    AsyncStorage.removeItem("setting_auto_start").catch(() => {}),
+    AsyncStorage.removeItem("setting_confirm_delete").catch(() => {}),
+  ]);
 }

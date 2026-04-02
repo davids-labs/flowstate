@@ -12,6 +12,7 @@ import { useDatabaseSafe } from '../../components/DatabaseProvider';
 import { useTheme } from '../../constants/ThemeContext';
 import { radius, space } from '../../constants/theme';
 import { loadPlannerDayBundle, type PlannerDayBundle } from '../../lib/planner';
+import { refreshAmbientState } from '../../services/systemSync';
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
@@ -192,6 +193,7 @@ export default function PlanScreen() {
       });
     }
     setShowTaskEditor(false);
+    await refreshAmbientState(db);
     await loadData();
   }, [db, selectedDate, loadData]);
 
@@ -336,6 +338,7 @@ export default function PlanScreen() {
         onTaskToggle={async (taskId, completed) => {
           if (!db) return;
           await updateTask(db, taskId, { completed });
+          await refreshAmbientState(db);
           await loadData();
         }}
         onTaskPress={(taskId) => openTaskEditor(taskId)}
@@ -370,7 +373,11 @@ export default function PlanScreen() {
         date={selectedDate}
         initialSession={editingSession}
         onClose={() => setShowSessionSheet(false)}
-        onSaved={loadData}
+        onSaved={async () => {
+          if (!db) return;
+          await refreshAmbientState(db);
+          await loadData();
+        }}
       />
     </ScreenWrapper>
   );
