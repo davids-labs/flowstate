@@ -3,6 +3,7 @@ import { ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable,
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import Svg, { Circle } from "react-native-svg";
+import * as Notifications from "expo-notifications";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createSessionEvent, getRoutine, getRoutineBlocks, getSession, getSessionBlockTodos, getSessions, updateSession, upsertSessionBlockTodo } from "@flowstate/core";
@@ -15,6 +16,7 @@ import { useSyncContext } from "../../components/SyncProvider";
 import { useTimerStore } from "../../stores/timerStore";
 import { cancelTimerNotifications, stopBackgroundTimer } from "../../services/notifications";
 import { FormTextField } from "../../components/primitives/Form";
+import { refreshAmbientState } from "../../services/systemSync";
 
 function formatTime(ms: number) {
   const negative = ms < 0;
@@ -54,6 +56,10 @@ export default function SessionScreen() {
   const [sessionNotes, setSessionNotes] = useState("");
   const [todoChecked, setTodoChecked] = useState<Record<string, boolean>>({});
   const [pauseElapsed, setPauseElapsed] = useState(0);
+  const [breakEndsAt, setBreakEndsAt] = useState<number | null>(null);
+  const [breakRemainingMs, setBreakRemainingMs] = useState(0);
+  const [breakNotificationId, setBreakNotificationId] = useState<string | null>(null);
+  const [resumeAfterBreak, setResumeAfterBreak] = useState(false);
   const currentSessionId = allSessions[currentSessionIndex]?.id ?? id;
   const navigateDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const notesTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -68,6 +74,7 @@ export default function SessionScreen() {
   const elapsed = useTimerStore((s) => s.elapsed);
   const init = useTimerStore((s) => s.init);
   const restore = useTimerStore((s) => s.restore);
+  const setPillar = useTimerStore((s) => s.setPillar);
   const play = useTimerStore((s) => s.play);
   const pause = useTimerStore((s) => s.pause);
   const resume = useTimerStore((s) => s.resume);
@@ -102,6 +109,7 @@ export default function SessionScreen() {
       }
       setSessionData({ routineName: sess.routineName, blocks, status: sess.status, startedAt: sess.startedAt, totalPausedMs: sess.totalPausedMs ?? 0, currentBlockIndex: sess.currentBlockIndex ?? 0, dayPlanId: sess.dayPlanId });
       setSessionNotes(sess.notes ?? "");
+      setPillar((sess as any).pillar ?? "general");
       try {
         const checkedMap: Record<string, boolean> = {};
         for (let i = 0; i < blocks.length; i += 1) {
@@ -120,7 +128,7 @@ export default function SessionScreen() {
       console.error("Failed to load session:", e);
       setSessionData(null);
     } finally { setLoading(false); }
-  }, [db, init, isReady, restore]);
+  }, [db, init, isReady, restore, setPillar]);
 
   useEffect(() => { if (id) loadSessionData(id); }, [id, loadSessionData]);
   useEffect(() => { if (sessionData && sessionData.status !== "completed" && keepAwakePref) { activateKeepAwakeAsync(); return () => { deactivateKeepAwake(); }; } }, [keepAwakePref, sessionData]);
@@ -149,9 +157,81 @@ export default function SessionScreen() {
     const s = useTimerStore.getState();
     syncTimerState({ phase: s.phase, startedAt: s._engine?.state?.startedAt ?? null, pausedAt: s._engine?.state?.pausedAt ?? null, totalPausedMs: s._engine?.state?.totalPausedMs ?? 0, blockDurationMs: s._engine?.state?.blockDurationMs ?? 0, blockIndex: s.blockIndex, routineId: null, routineName: s.routineName });
   }, [syncTimerState]);
+  const cancelBreakReminder = useCallback(async () => {
+    if (!breakNotificationId) return;
+    try { await Notifications.cancelScheduledNotificationAsync(breakNotificationId); } catch {}
+    setBreakNotificationId(null);
+  }, [breakNotificationId]);
+  const scheduleBreakReminder = useCallback(async (minutes: number) => {
+    try {
+      const perms = await Notifications.getPermissionsAsync();
+      if (perms.status !== "granted") {
+        const next = await Notifications.requestPermissionsAsync();
+        if (next.status !== "granted") return null;
+      }
+      return await Notifications.scheduleNotificationAsync({
+        content: {
+          title: "Break complete",
+          body: `Time to get back to ${sessionData?.routineName ?? "your session"}.`,
+          sound: true,
+        },
+        trigger: new Date(Date.now() + minutes * 60_000) as any,
+      });
+    } catch {
+      return null;
+    }
+  }, [sessionData?.routineName]);
+  const clearBreak = useCallback(async (resumeSession: boolean) => {
+    await cancelBreakReminder();
+    setBreakEndsAt(null);
+    setBreakRemainingMs(0);
+    if (db && currentSessionId) createSessionEvent(db, { sessionId: currentSessionId, type: "break_ended" }).catch(() => {});
+    if (resumeSession && resumeAfterBreak && phase === "paused") {
+      resume(); persistTimerState("in_progress"); pushTimerSync();
+    }
+    setResumeAfterBreak(false);
+  }, [cancelBreakReminder, currentSessionId, db, persistTimerState, phase, pushTimerSync, resume, resumeAfterBreak]);
+  const startBreak = useCallback(async (minutes: number) => {
+    const shouldResume = phase === "running" || phase === "overdue";
+    if (shouldResume) {
+      pause(); persistTimerState("in_progress"); pushTimerSync();
+    }
+    setResumeAfterBreak(shouldResume);
+    const endAt = Date.now() + minutes * 60_000;
+    setBreakEndsAt(endAt);
+    setBreakRemainingMs(minutes * 60_000);
+    const notificationId = await scheduleBreakReminder(minutes);
+    if (notificationId) setBreakNotificationId(notificationId);
+    if (db && currentSessionId) {
+      createSessionEvent(db, { sessionId: currentSessionId, type: "break_started", data: { minutes } }).catch(() => {});
+    }
+  }, [currentSessionId, db, pause, persistTimerState, phase, pushTimerSync, scheduleBreakReminder]);
+  const completeSession = useCallback(async (openNext = false) => {
+    if (!db || !currentSessionId) return;
+    haptic.impact("medium");
+    end();
+    await cancelBreakReminder();
+    setBreakEndsAt(null);
+    const endedAt = new Date().toISOString();
+    try {
+      await updateSession(db, currentSessionId, { status: "completed", endedAt });
+      await createSessionEvent(db, { sessionId: currentSessionId, type: "ended" });
+      syncSession(currentSessionId, { status: "completed", endedAt });
+      pushTimerSync();
+      await refreshAmbientState(db);
+      setAllSessions((prev) => prev.map((session) => session.id === currentSessionId ? { ...session, status: "completed" } : session));
+    } catch (e) { console.error("Failed to complete session:", e); }
+    if (openNext && allSessions[currentSessionIndex + 1]?.id) {
+      router.replace(`/session/${allSessions[currentSessionIndex + 1].id}` as any);
+      return;
+    }
+    router.replace(`/session/debrief?sessionId=${currentSessionId}`);
+  }, [allSessions, cancelBreakReminder, currentSessionId, currentSessionIndex, db, end, haptic, pushTimerSync, router, syncSession]);
   const navigateToSession = useCallback(async (targetIndex: number) => {
     const target = allSessions[targetIndex];
     if (!target) return;
+    if (targetIndex === currentSessionIndex) return;
+    if ((phase === "running" || phase === "paused" || phase === "overdue" || phase === "pending_condition") && targetIndex !== currentSessionIndex) return;
     if (navigateDebounceRef.current) clearTimeout(navigateDebounceRef.current);
     navigateDebounceRef.current = setTimeout(async () => {
       if (phase === "running" || phase === "paused" || phase === "overdue") await persistTimerState("in_progress");
@@ -159,15 +239,39 @@ export default function SessionScreen() {
       try { await stopBackgroundTimer(); await cancelTimerNotifications(); } catch {}
       try { await AsyncStorage.removeItem("flowstate_timer_state"); } catch {}
       haptic.impact("light");
-      setCurrentSessionIndex(targetIndex); setLoading(true); await loadSessionData(target.id);
+      setCurrentSessionIndex(targetIndex);
+      setLoading(true);
+      router.replace(`/session/${target.id}` as any);
     }, 200);
-  }, [allSessions, end, haptic, loadSessionData, persistTimerState, phase]);
+  }, [allSessions, currentSessionIndex, end, haptic, persistTimerState, phase, router]);
   useEffect(() => {
     if (phase !== "paused" || !pausedAt) { setPauseElapsed(0); return; }
     setPauseElapsed(Date.now() - pausedAt);
     const iv = setInterval(() => setPauseElapsed(Date.now() - pausedAt), 250);
     return () => clearInterval(iv);
   }, [pausedAt, phase]);
+  useEffect(() => {
+    if (!breakEndsAt) { setBreakRemainingMs(0); return; }
+    const updateRemaining = () => {
+      const remainingMs = breakEndsAt - Date.now();
+      if (remainingMs <= 0) {
+        setBreakEndsAt(null);
+        setBreakRemainingMs(0);
+        setBreakNotificationId(null);
+        if (resumeAfterBreak && phase === "paused") {
+          resume().then(() => {
+            persistTimerState("in_progress");
+            pushTimerSync();
+          }).catch(() => {});
+        }
+        return;
+      }
+      setBreakRemainingMs(remainingMs);
+    };
+    updateRemaining();
+    const iv = setInterval(updateRemaining, 1000);
+    return () => clearInterval(iv);
+  }, [breakEndsAt, persistTimerState, phase, pushTimerSync, resume, resumeAfterBreak]);
   const getPauseColor = (pauseMs: number, totalMs: number) => totalMs <= 0 ? themeColors.success : pauseMs / totalMs < 0.05 ? themeColors.success : pauseMs / totalMs < 0.15 ? "#A3E635" : pauseMs / totalMs < 0.3 ? themeColors.warning : pauseMs / totalMs < 0.6 ? "#F97316" : themeColors.danger;
 
   const handlePlayPause = useCallback(() => {
@@ -192,23 +296,29 @@ export default function SessionScreen() {
     }
     if (phase === "completed") router.replace(`/session/debrief?sessionId=${currentSessionId}`);
   }, [currentSessionId, db, haptic, pause, persistTimerState, phase, play, pushTimerSync, resume, router]);
-  const handleSkip = useCallback(() => {
-    haptic.impact("light"); skip(); persistTimerState("in_progress");
-    if (db && currentSessionId) createSessionEvent(db, { sessionId: currentSessionId, type: "block_skipped", blockIndex }).catch(() => {});
-    pushTimerSync();
-  }, [blockIndex, currentSessionId, db, haptic, persistTimerState, pushTimerSync, skip]);
-  const handleEnd = useCallback(async () => {
-    haptic.impact("medium"); end();
+  const handleSkip = useCallback(async () => {
+    haptic.impact("light");
+    skip();
+    const state = useTimerStore.getState();
     if (db && currentSessionId) {
-      try {
+      await createSessionEvent(db, { sessionId: currentSessionId, type: "block_skipped", blockIndex }).catch(() => {});
+      if (state.phase === "completed") {
         const endedAt = new Date().toISOString();
-        await updateSession(db, currentSessionId, { status: "completed", endedAt });
-        await createSessionEvent(db, { sessionId: currentSessionId, type: "ended" });
-        syncSession(currentSessionId, { status: "completed", endedAt }); pushTimerSync();
-      } catch (e) { console.error("Failed to save session completion:", e); }
+        await updateSession(db, currentSessionId, { status: "completed", endedAt }).catch(() => {});
+        syncSession(currentSessionId, { status: "completed", endedAt });
+        await refreshAmbientState(db);
+      } else {
+        await persistTimerState("in_progress");
+      }
     }
-    router.replace(`/session/debrief?sessionId=${currentSessionId}`);
-  }, [currentSessionId, db, end, haptic, pushTimerSync, router, syncSession]);
+    pushTimerSync();
+  }, [blockIndex, currentSessionId, db, haptic, persistTimerState, pushTimerSync, skip, syncSession]);
+  const handleEnd = useCallback(async () => {
+    await completeSession(false);
+  }, [completeSession]);
+  const handleCompleteAndNext = useCallback(async () => {
+    await completeSession(true);
+  }, [completeSession]);
   const handleUndoComplete = useCallback(async () => {
     if (!db || !currentSessionId) return;
     haptic.impact("medium");
@@ -257,6 +367,8 @@ export default function SessionScreen() {
   const isCompleted = session.status === "completed" || phase === "completed";
   const currentBlockTodos = session.blocks[blockIndex]?.todos ?? [];
   const totalBlockCount = totalBlocks || session.blocks.length;
+  const nextSession = allSessions[currentSessionIndex + 1];
+  const navLocked = (phase === "running" || phase === "paused" || phase === "overdue" || phase === "pending_condition") && !isCompleted;
   const pauseColor = getPauseColor(pauseElapsed, blockDurationMs);
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: themeColors.background }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
@@ -264,21 +376,22 @@ export default function SessionScreen() {
         {allSessions.length > 1 ? (
           <View style={[styles.card, { backgroundColor: themeColors.surfaceElevated, borderColor: themeColors.border }]}>
             <View style={styles.sessionNav}>
-              <Pressable onPress={() => navigateToSession(currentSessionIndex - 1)} disabled={currentSessionIndex <= 0} style={[styles.navArrow, { backgroundColor: themeColors.surface, borderColor: themeColors.border }, currentSessionIndex <= 0 && { opacity: 0.35 }]}>
+              <Pressable onPress={() => navigateToSession(currentSessionIndex - 1)} disabled={currentSessionIndex <= 0 || navLocked} style={[styles.navArrow, { backgroundColor: themeColors.surface, borderColor: themeColors.border }, (currentSessionIndex <= 0 || navLocked) && { opacity: 0.35 }]}>
                 <Feather name="chevron-left" size={18} color={themeColors.accent} />
               </Pressable>
               <FlatList data={allSessions} horizontal showsHorizontalScrollIndicator={false} keyExtractor={(item: any) => item.id} contentContainerStyle={{ gap: spacing.xs, alignItems: "center" }} renderItem={({ item, index }: { item: any; index: number }) => {
                 const isCurrent = index === currentSessionIndex, done = item.status === "completed";
                 return (
-                  <Pressable onPress={() => navigateToSession(index)} style={[styles.sessionPill, { backgroundColor: isCurrent ? themeColors.accentTint : themeColors.surface, borderColor: isCurrent ? themeColors.accent : done ? themeColors.success : themeColors.border }]}>
+                  <Pressable disabled={navLocked && !isCurrent} onPress={() => navigateToSession(index)} style={[styles.sessionPill, { backgroundColor: isCurrent ? themeColors.accentTint : themeColors.surface, borderColor: isCurrent ? themeColors.accent : done ? themeColors.success : themeColors.border }, navLocked && !isCurrent && { opacity: 0.45 }]}>
                     <Text style={[styles.sessionPillText, { color: isCurrent ? themeColors.accent : done ? themeColors.success : themeColors.text }]} numberOfLines={1}>{item.routineName}</Text>
                   </Pressable>
                 );
               }} />
-              <Pressable onPress={() => navigateToSession(currentSessionIndex + 1)} disabled={currentSessionIndex >= allSessions.length - 1} style={[styles.navArrow, { backgroundColor: themeColors.surface, borderColor: themeColors.border }, currentSessionIndex >= allSessions.length - 1 && { opacity: 0.35 }]}>
+              <Pressable onPress={() => navigateToSession(currentSessionIndex + 1)} disabled={currentSessionIndex >= allSessions.length - 1 || navLocked} style={[styles.navArrow, { backgroundColor: themeColors.surface, borderColor: themeColors.border }, (currentSessionIndex >= allSessions.length - 1 || navLocked) && { opacity: 0.35 }]}>
                 <Feather name="chevron-right" size={18} color={themeColors.accent} />
               </Pressable>
             </View>
+            {navLocked ? <Text style={[styles.helperText, { color: themeColors.textSecondary }]}>Complete the current session to move to the next one without losing stats.</Text> : null}
           </View>
         ) : null}
         <View style={[styles.heroCard, { backgroundColor: themeColors.surfaceElevated, borderColor: themeColors.border }]}>
@@ -313,6 +426,27 @@ export default function SessionScreen() {
             <View style={[styles.pauseBar, { backgroundColor: themeColors.surfaceBorder }]}><View style={[styles.pauseBarFill, { backgroundColor: pauseColor, width: `${Math.min((pauseElapsed / Math.max(blockDurationMs, 1)) * 100, 100)}%` }]} /></View>
           </View> : null}
         </View>
+        {breakEndsAt ? <View style={[styles.card, { backgroundColor: themeColors.surfaceElevated, borderColor: themeColors.border }]}>
+          <View style={styles.breakHeader}>
+            <View style={styles.completionCopy}>
+              <Text style={[styles.completionTitle, { color: themeColors.text }]}>Ad-hoc break running</Text>
+              <Text style={[styles.completionSubtitle, { color: themeColors.textSecondary }]}>A reminder will nudge you back when the break ends.</Text>
+            </View>
+            <View style={[styles.breakBadge, { backgroundColor: themeColors.accentTint }]}>
+              <Text style={[styles.phaseBadgeText, { color: themeColors.accent }]}>{formatTime(breakRemainingMs)}</Text>
+            </View>
+          </View>
+          <View style={styles.actionRow}>
+            <Pressable style={[styles.secondaryButton, { backgroundColor: themeColors.surface, borderColor: themeColors.border }]} onPress={() => clearBreak(true)}>
+              <Feather name="play" size={16} color={themeColors.textPrimary} />
+              <Text style={[styles.secondaryButtonText, { color: themeColors.text }]}>Resume now</Text>
+            </Pressable>
+            <Pressable style={[styles.secondaryButton, { backgroundColor: themeColors.surface, borderColor: themeColors.border }]} onPress={() => startBreak(5)}>
+              <Feather name="plus-circle" size={16} color={themeColors.textPrimary} />
+              <Text style={[styles.secondaryButtonText, { color: themeColors.text }]}>+5 min</Text>
+            </Pressable>
+          </View>
+        </View> : null}
         {isCompleted ? <View style={[styles.card, { backgroundColor: themeColors.surfaceElevated, borderColor: themeColors.border }]}>
           <View style={styles.completionCopy}>
             <Text style={[styles.completionTitle, { color: themeColors.text }]}>Session complete</Text>
@@ -327,17 +461,27 @@ export default function SessionScreen() {
           </Pressable>
         </View> : <View style={[styles.card, { backgroundColor: themeColors.surfaceElevated, borderColor: themeColors.border }]}>
           <Pressable style={[styles.fullButton, { backgroundColor: themeColors.accent }]} onPress={handlePlayPause}>
-            <Feather name={isPaused ? "play" : "pause"} size={20} color={themeColors.white} />
-            <Text style={[styles.fullButtonText, { color: themeColors.white }]}>{isPaused ? "Start Session" : "Pause Session"}</Text>
+            <Feather name={phase === "paused" ? "play" : isPaused ? "play" : "pause"} size={20} color={themeColors.white} />
+            <Text style={[styles.fullButtonText, { color: themeColors.white }]}>{phase === "idle" ? "Start Session" : phase === "paused" ? "Resume Session" : "Pause Session"}</Text>
           </Pressable>
           <View style={styles.actionRow}>
             <Pressable style={[styles.secondaryButton, { backgroundColor: themeColors.surface, borderColor: themeColors.border }]} onPress={handleSkip}>
               <Feather name="skip-forward" size={18} color={themeColors.textSecondary} />
-              <Text style={[styles.secondaryButtonText, { color: themeColors.textSecondary }]}>Skip</Text>
+              <Text style={[styles.secondaryButtonText, { color: themeColors.textSecondary }]}>Skip Block</Text>
             </Pressable>
-            <Pressable style={[styles.secondaryButton, { backgroundColor: themeColors.danger + "10", borderColor: themeColors.danger + "45" }]} onPress={handleEnd}>
-              <Feather name="square" size={16} color={themeColors.danger} />
-              <Text style={[styles.secondaryButtonText, { color: themeColors.danger }]}>End</Text>
+            <Pressable style={[styles.secondaryButton, { backgroundColor: themeColors.surface, borderColor: themeColors.border }]} onPress={() => startBreak(5)}>
+              <Feather name="coffee" size={16} color={themeColors.textPrimary} />
+              <Text style={[styles.secondaryButtonText, { color: themeColors.text }]}>Break 5m</Text>
+            </Pressable>
+          </View>
+          <View style={styles.actionRow}>
+            <Pressable style={[styles.secondaryButton, { backgroundColor: themeColors.success + "12", borderColor: themeColors.success + "45" }]} onPress={handleEnd}>
+              <Feather name="check-circle" size={16} color={themeColors.success} />
+              <Text style={[styles.secondaryButtonText, { color: themeColors.success }]}>Complete</Text>
+            </Pressable>
+            <Pressable style={[styles.secondaryButton, { backgroundColor: themeColors.surface, borderColor: themeColors.border }, !nextSession && { opacity: 0.45 }]} onPress={handleCompleteAndNext} disabled={!nextSession}>
+              <Feather name="arrow-right-circle" size={16} color={themeColors.textPrimary} />
+              <Text style={[styles.secondaryButtonText, { color: themeColors.text }]}>Complete & Next</Text>
             </Pressable>
           </View>
         </View>}
@@ -396,10 +540,13 @@ const styles = StyleSheet.create({
   navArrow: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   sessionPill: { minWidth: 76, borderRadius: borderRadius.full, borderWidth: 1, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs, alignItems: "center" },
   sessionPillText: { fontSize: fontSize.xs, fontWeight: "600", maxWidth: 84 },
-  actionRow: { flexDirection: "row", gap: spacing.sm },
+  helperText: { fontSize: fontSize.sm },
+  breakHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm },
+  breakBadge: { borderRadius: borderRadius.full, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
+  actionRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
   fullButton: { minHeight: 56, borderRadius: borderRadius.lg, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: spacing.sm, paddingHorizontal: spacing.md },
   fullButtonText: { fontSize: fontSize.md, fontWeight: "700" },
-  secondaryButton: { flex: 1, minHeight: 50, borderRadius: borderRadius.lg, borderWidth: 1, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: spacing.xs, paddingHorizontal: spacing.md },
+  secondaryButton: { flex: 1, minHeight: 50, minWidth: 140, borderRadius: borderRadius.lg, borderWidth: 1, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: spacing.xs, paddingHorizontal: spacing.md },
   secondaryButtonText: { fontSize: fontSize.sm, fontWeight: "700" },
   completionCopy: { gap: spacing.xs },
   completionTitle: { fontSize: fontSize.lg, fontWeight: "700" },

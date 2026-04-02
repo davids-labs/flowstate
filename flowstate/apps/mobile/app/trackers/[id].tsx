@@ -104,10 +104,10 @@ export default function TrackerDetailScreen() {
           </Pressable>
           <Pressable
             style={[styles.secondaryButton, { borderColor: themeTokens.border }]}
-            onPress={() => router.push('/library' as any)}
+            onPress={() => router.push('/track' as any)}
           >
             <AppText variant="caption1" color={themeTokens.textSecondary}>
-              Back to library
+              Back to track
             </AppText>
           </Pressable>
         </View>

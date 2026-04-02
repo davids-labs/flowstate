@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import {
-  Alert,
   Pressable,
+  RefreshControl,
   ScrollView,
   SectionList,
   StyleSheet,
@@ -9,289 +9,56 @@ import {
   type SectionListData,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
-import { useFocusEffect } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect, useRouter } from 'expo-router';
 import {
   createTask,
-  deleteTask,
   getTask,
-  getTasks,
   updateTask,
 } from '@flowstate/core';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDatabaseSafe } from '../../components/DatabaseProvider';
 import { AppText } from '../../components/primitives/Text';
 import { TaskEditor, type TaskFormData } from '../../components/tasks/TaskEditor';
 import { useTheme } from '../../constants/ThemeContext';
 import { radius, space } from '../../constants/theme';
+import {
+  completeInboxItem,
+  getInboxItems,
+  snoozeInboxItem,
+  type InboxItem,
+} from '../../services/inbox';
+import { refreshAmbientState } from '../../services/systemSync';
 
-type Mode = 'list' | 'calendar';
-type TaskSectionKey = 'Overdue' | 'Today' | 'Upcoming' | 'Inbox' | 'Completed';
+const SECTION_ORDER: Array<InboxItem['section']> = [
+  'Overdue Tasks',
+  'Inbox Tasks',
+  'Upcoming Sessions',
+  'Tracker Prompts',
+  'Streak Alerts',
+  'Reminder Queue',
+  'Snoozed',
+];
 
-interface TTask {
-  id: string;
-  title?: string | null;
-  pillar?: string | null;
-  dueDate?: string | null;
-  dueTime?: string | null;
-  priority?: number | null;
-  completed?: number | 0;
-  category?: string | null;
-  notes?: string | null;
-  recurrence?: string | null;
+function iconForItem(item: InboxItem): keyof typeof Feather.glyphMap {
+  if (item.kind === 'task') return 'check-square';
+  if (item.kind === 'session_prompt') return 'play-circle';
+  if (item.kind === 'tracker_prompt') return 'activity';
+  if (item.kind === 'streak_alert') return 'zap';
+  return 'bell';
 }
 
-function todayISO() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function formatLongDate(date: string) {
-  return new Date(`${date}T12:00:00`).toLocaleDateString('en-US', {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-  });
-}
-
-function addDays(date: string, offset: number) {
-  const next = new Date(`${date}T12:00:00`);
-  next.setDate(next.getDate() + offset);
-  return next.toISOString().slice(0, 10);
-}
-
-function compareTasks(left: TTask, right: TTask) {
-  const leftDate = left.dueDate ?? '9999-12-31';
-  const rightDate = right.dueDate ?? '9999-12-31';
-  if (leftDate !== rightDate) return leftDate.localeCompare(rightDate);
-
-  const leftTime = left.dueTime ?? '99:99';
-  const rightTime = right.dueTime ?? '99:99';
-  if (leftTime !== rightTime) return leftTime.localeCompare(rightTime);
-
-  const leftPriority = left.priority ?? 2;
-  const rightPriority = right.priority ?? 2;
-  if (leftPriority !== rightPriority) return leftPriority - rightPriority;
-
-  return (left.title ?? '').localeCompare(right.title ?? '');
-}
-
-function priorityColor(priority: number | null | undefined, fallback: string) {
-  if (priority === 1) return '#EF4444';
-  if (priority === 2) return '#F59E0B';
-  return fallback;
-}
-
-function taskSection(task: TTask): TaskSectionKey {
-  if (task.completed) return 'Completed';
-  if (!task.dueDate) return 'Inbox';
-  if (task.dueDate < todayISO()) return 'Overdue';
-  if (task.dueDate === todayISO()) return 'Today';
-  return 'Upcoming';
-}
-
-function dueLabel(task: TTask) {
-  if (!task.dueDate) return task.category ?? 'Inbox';
-
-  const datePart =
-    task.dueDate === todayISO()
-      ? 'Today'
-      : task.dueDate === addDays(todayISO(), 1)
-        ? 'Tomorrow'
-        : new Date(`${task.dueDate}T12:00:00`).toLocaleDateString('en-US', {
-            month: 'short',
-            day: 'numeric',
-          });
-
-  if (task.dueTime) return `${datePart} · ${task.dueTime}`;
-  return datePart;
-}
-
-function CalendarGrid({
-  tasks,
-  selectedDate,
-  onSelectDate,
-}: {
-  tasks: TTask[];
-  selectedDate: string;
-  onSelectDate: (date: string) => void;
-}) {
-  const { themeTokens } = useTheme();
-  const [viewYear, setViewYear] = useState(() => new Date().getFullYear());
-  const [viewMonth, setViewMonth] = useState(() => new Date().getMonth());
-  const today = todayISO();
-
-  const monthLabel = useMemo(
-    () =>
-      new Date(viewYear, viewMonth, 1).toLocaleDateString('en-US', {
-        month: 'long',
-        year: 'numeric',
-      }),
-    [viewYear, viewMonth],
-  );
-
-  const cells = useMemo(() => {
-    const first = new Date(viewYear, viewMonth, 1).getDay();
-    const total = new Date(viewYear, viewMonth + 1, 0).getDate();
-    const nextCells: Array<number | null> = Array(first).fill(null);
-    for (let day = 1; day <= total; day += 1) nextCells.push(day);
-    while (nextCells.length % 7 !== 0) nextCells.push(null);
-    return nextCells;
-  }, [viewYear, viewMonth]);
-
-  const countsByDate = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const task of tasks) {
-      if (!task.dueDate) continue;
-      counts[task.dueDate] = (counts[task.dueDate] ?? 0) + 1;
-    }
-    return counts;
-  }, [tasks]);
-
-  function monthISO(day: number) {
-    return `${viewYear}-${String(viewMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-  }
-
-  function moveMonth(offset: number) {
-    const next = new Date(viewYear, viewMonth + offset, 1);
-    setViewYear(next.getFullYear());
-    setViewMonth(next.getMonth());
-  }
-
-  return (
-    <View style={[styles.calendarCard, { backgroundColor: themeTokens.surfaceElevated, borderColor: themeTokens.border }]}>
-      <View style={styles.calendarHeader}>
-        <Pressable
-          style={[styles.calendarNav, { backgroundColor: themeTokens.surface, borderColor: themeTokens.border }]}
-          onPress={() => moveMonth(-1)}
-        >
-          <Feather name="chevron-left" size={16} color={themeTokens.textPrimary} />
-        </Pressable>
-        <AppText variant="headline" style={{ fontWeight: '700' }}>
-          {monthLabel}
-        </AppText>
-        <Pressable
-          style={[styles.calendarNav, { backgroundColor: themeTokens.surface, borderColor: themeTokens.border }]}
-          onPress={() => moveMonth(1)}
-        >
-          <Feather name="chevron-right" size={16} color={themeTokens.textPrimary} />
-        </Pressable>
-      </View>
-
-      <View style={styles.calendarDowRow}>
-        {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day) => (
-          <View key={day} style={styles.calendarCell}>
-            <AppText variant="caption2" color={themeTokens.textTertiary}>
-              {day}
-            </AppText>
-          </View>
-        ))}
-      </View>
-
-      <View style={styles.calendarGrid}>
-        {cells.map((day, index) => {
-          if (!day) return <View key={`empty-${index}`} style={styles.calendarCell} />;
-
-          const date = monthISO(day);
-          const count = countsByDate[date] ?? 0;
-          const isToday = date === today;
-          const isSelected = date === selectedDate;
-
-          return (
-            <Pressable key={date} style={styles.calendarCell} onPress={() => onSelectDate(date)}>
-              <View
-                style={[
-                  styles.calendarBadge,
-                  isToday ? { backgroundColor: themeTokens.accent } : null,
-                  isSelected && !isToday
-                    ? { borderWidth: 1, borderColor: themeTokens.accent, backgroundColor: themeTokens.accentTint }
-                    : null,
-                ]}
-              >
-                <AppText
-                  variant="footnote"
-                  color={
-                    isToday
-                      ? '#fff'
-                      : isSelected
-                        ? themeTokens.accent
-                        : themeTokens.textPrimary
-                  }
-                  style={{ fontWeight: isToday || isSelected ? '700' : '500' }}
-                >
-                  {day}
-                </AppText>
-              </View>
-              <View style={styles.calendarDots}>
-                {Array.from({ length: Math.min(count, 3) }).map((_, dotIndex) => (
-                  <View
-                    key={`${date}-${dotIndex}`}
-                    style={[styles.calendarDot, { backgroundColor: themeTokens.accent }]}
-                  />
-                ))}
-              </View>
-            </Pressable>
-          );
-        })}
-      </View>
-    </View>
-  );
-}
-
-function ModeSwitch({
-  mode,
-  onChange,
-}: {
-  mode: Mode;
-  onChange: (value: Mode) => void;
-}) {
-  const { themeTokens } = useTheme();
-
-  return (
-    <View style={[styles.modeSwitch, { backgroundColor: themeTokens.surface, borderColor: themeTokens.border }]}>
-      {[
-        { key: 'list' as const, label: 'List' },
-        { key: 'calendar' as const, label: 'Calendar' },
-      ].map((option) => {
-        const active = mode === option.key;
-        return (
-          <Pressable
-            key={option.key}
-            style={[
-              styles.modeButton,
-              active ? { backgroundColor: themeTokens.accent } : null,
-            ]}
-            onPress={() => onChange(option.key)}
-          >
-            <AppText
-              variant="caption1"
-              color={active ? '#fff' : themeTokens.textSecondary}
-              style={{ fontWeight: '700' }}
-            >
-              {option.label}
-            </AppText>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-}
-
-function SummaryCard({
+function SummaryPill({
   label,
   value,
-  icon,
 }: {
   label: string;
   value: number;
-  icon: keyof typeof Feather.glyphMap;
 }) {
   const { themeTokens } = useTheme();
 
   return (
-    <View style={[styles.summaryCard, { backgroundColor: themeTokens.surfaceElevated, borderColor: themeTokens.border }]}>
-      <View style={[styles.summaryIcon, { backgroundColor: themeTokens.accentTint }]}>
-        <Feather name={icon} size={14} color={themeTokens.accent} />
-      </View>
-      <AppText variant="title3" style={{ fontWeight: '700' }}>
+    <View style={[styles.summaryPill, { backgroundColor: themeTokens.surfaceElevated, borderColor: themeTokens.border }]}>
+      <AppText variant="headline" style={{ fontWeight: '700' }}>
         {value}
       </AppText>
       <AppText variant="caption1" color={themeTokens.textSecondary}>
@@ -301,342 +68,239 @@ function SummaryCard({
   );
 }
 
-function TaskRow({
+function InboxRow({
   item,
-  onToggle,
-  onPress,
-  onDelete,
+  onOpen,
+  onComplete,
+  onSnooze,
 }: {
-  item: TTask;
-  onToggle: (id: string, completed: boolean) => void;
-  onPress: (id: string) => void;
-  onDelete: (task: TTask) => void;
+  item: InboxItem;
+  onOpen: (item: InboxItem) => void;
+  onComplete: (item: InboxItem) => void;
+  onSnooze: (item: InboxItem) => void;
 }) {
   const { themeTokens } = useTheme();
-  const done = !!item.completed;
-  const accent = done ? themeTokens.accent : themeTokens.borderStrong;
+  const isTask = item.kind === 'task';
+  const isFallbackReminder = !isTask && item.id.includes(':fallback');
 
   return (
     <Pressable
-      style={[styles.taskRow, { backgroundColor: themeTokens.surfaceElevated, borderColor: themeTokens.border }]}
-      onPress={() => onPress(item.id)}
-      onLongPress={() => onDelete(item)}
+      style={[styles.rowCard, { backgroundColor: themeTokens.surfaceElevated, borderColor: themeTokens.border }]}
+      onPress={() => onOpen(item)}
     >
-      <Pressable
-        style={[
-          styles.checkbox,
-          {
-            borderColor: accent,
-            backgroundColor: done ? themeTokens.accent : 'transparent',
-          },
-        ]}
-        onPress={(event) => {
-          event.stopPropagation();
-          onToggle(item.id, !done);
-        }}
-        hitSlop={8}
-      >
-        {done ? <Feather name="check" size={12} color="#fff" /> : null}
-      </Pressable>
-
-      <View style={styles.taskCopy}>
-        <AppText
-          variant="body"
-          color={done ? themeTokens.textTertiary : themeTokens.textPrimary}
-          style={done ? styles.completedText : undefined}
-          numberOfLines={2}
-        >
-          {item.title ?? ''}
-        </AppText>
-        <AppText variant="footnote" color={themeTokens.textSecondary}>
-          {dueLabel(item)}
-        </AppText>
+      <View style={styles.rowTop}>
+        <View style={[styles.rowIcon, { backgroundColor: isTask ? themeTokens.accentTint : themeTokens.surface }]}>
+          <Feather
+            name={iconForItem(item)}
+            size={16}
+            color={isTask ? themeTokens.accent : themeTokens.textSecondary}
+          />
+        </View>
+        <View style={styles.rowCopy}>
+          <AppText variant="headline" style={{ fontWeight: '700' }} numberOfLines={2}>
+            {item.title}
+          </AppText>
+          <AppText variant="footnote" color={themeTokens.textSecondary} numberOfLines={2}>
+            {item.subtitle}
+          </AppText>
+        </View>
+        <Feather name="chevron-right" size={16} color={themeTokens.textTertiary} />
       </View>
 
-      <View style={styles.taskMeta}>
-        <View style={[styles.priorityDot, { backgroundColor: priorityColor(item.priority, themeTokens.textTertiary) }]} />
-        <Feather name="chevron-right" size={14} color={themeTokens.textTertiary} />
+      <View style={styles.rowActions}>
+        <Pressable
+          style={[styles.inlineAction, { backgroundColor: themeTokens.surface, borderColor: themeTokens.border }]}
+          onPress={(event) => {
+            event.stopPropagation();
+            onOpen(item);
+          }}
+        >
+          <Feather name="arrow-up-right" size={14} color={themeTokens.textPrimary} />
+          <AppText variant="caption1" style={{ fontWeight: '700' }}>
+            {isTask ? 'Edit' : 'Open'}
+          </AppText>
+        </Pressable>
+
+        {!isTask && !isFallbackReminder ? (
+          <Pressable
+            style={[styles.inlineAction, { backgroundColor: themeTokens.surface, borderColor: themeTokens.border }]}
+            onPress={(event) => {
+              event.stopPropagation();
+              onSnooze(item);
+            }}
+          >
+            <Feather name="clock" size={14} color={themeTokens.textPrimary} />
+            <AppText variant="caption1" style={{ fontWeight: '700' }}>
+              Snooze
+            </AppText>
+          </Pressable>
+        ) : null}
+
+        <Pressable
+          style={[
+            styles.inlineAction,
+            isTask
+              ? { backgroundColor: themeTokens.accentTint, borderColor: themeTokens.accent }
+              : { backgroundColor: `${themeTokens.success}14`, borderColor: `${themeTokens.success}45` },
+          ]}
+          onPress={(event) => {
+            event.stopPropagation();
+            onComplete(item);
+          }}
+        >
+          <Feather
+            name="check"
+            size={14}
+            color={isTask ? themeTokens.accent : themeTokens.success}
+          />
+          <AppText
+            variant="caption1"
+            color={isTask ? themeTokens.accent : themeTokens.success}
+            style={{ fontWeight: '700' }}
+          >
+            {isTask ? 'Done' : isFallbackReminder ? 'Handled' : 'Clear'}
+          </AppText>
+        </Pressable>
       </View>
     </Pressable>
   );
 }
 
-const SECTION_ORDER: TaskSectionKey[] = ['Overdue', 'Today', 'Upcoming', 'Inbox', 'Completed'];
-
-export default function TodosScreen() {
+export default function InboxScreen() {
+  const router = useRouter();
   const { themeTokens } = useTheme();
   const { db, isReady } = useDatabaseSafe();
   const insets = useSafeAreaInsets();
-  const [tasks, setTasks] = useState<TTask[]>([]);
-  const [mode, setMode] = useState<Mode>('list');
-  const [showCompleted, setShowCompleted] = useState(false);
+  const [items, setItems] = useState<InboxItem[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
   const [showEditor, setShowEditor] = useState(false);
   const [editingTask, setEditingTask] = useState<TaskFormData | undefined>(undefined);
-  const [calendarDate, setCalendarDate] = useState(todayISO());
 
-  const loadTasks = useCallback(async () => {
+  const loadInbox = useCallback(async () => {
     if (!db || !isReady) return;
-    try {
-      const rows = await getTasks(db);
-      setTasks((rows as TTask[]).slice().sort(compareTasks));
-    } catch {
-      // Keep the current UI state if task loading fails.
-    }
+    const nextItems = await getInboxItems(db);
+    setItems(nextItems);
   }, [db, isReady]);
 
   useFocusEffect(
     useCallback(() => {
-      loadTasks();
-    }, [loadTasks]),
+      loadInbox();
+    }, [loadInbox]),
   );
 
-  const handleToggle = useCallback(async (id: string, completed: boolean) => {
-    if (!db) return;
-    setTasks((current) =>
-      current.map((task) => (task.id === id ? { ...task, completed: completed ? 1 : 0 } : task)),
-    );
-    try {
-      await updateTask(db, id, { completed });
-      await loadTasks();
-    } catch {
-      await loadTasks();
-    }
-  }, [db, loadTasks]);
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await loadInbox();
+    setRefreshing(false);
+  }, [loadInbox]);
 
-  const openEditor = useCallback(async (id?: string) => {
-    if (!db || !id) {
+  const sections = useMemo((): Array<SectionListData<InboxItem>> => {
+    const grouped = new Map<InboxItem['section'], InboxItem[]>();
+    for (const item of items) {
+      const existing = grouped.get(item.section) ?? [];
+      existing.push(item);
+      grouped.set(item.section, existing);
+    }
+    return SECTION_ORDER
+      .filter((section) => (grouped.get(section) ?? []).length > 0)
+      .map((section) => ({
+        title: section,
+        data: grouped.get(section) ?? [],
+      }));
+  }, [items]);
+
+  const stats = useMemo(() => {
+    return {
+      tasks: items.filter((item) => item.kind === 'task').length,
+      prompts: items.filter((item) => item.kind !== 'task' && item.section !== 'Snoozed').length,
+      snoozed: items.filter((item) => item.section === 'Snoozed').length,
+    };
+  }, [items]);
+
+  const openItem = useCallback(async (item: InboxItem) => {
+    if (item.kind === 'task') {
+      if (!db) return;
+      const task = await getTask(db, item.id);
+      if (!task) return;
       setEditingTask({
-        dueDate: '',
-        dueTime: '',
-        pillar: 'general',
-        priority: 2,
-        title: '',
-        category: '',
-        notes: '',
-        recurrence: '',
+        id: task.id,
+        title: task.title ?? '',
+        pillar: task.pillar ?? 'general',
+        category: task.category ?? '',
+        dueDate: task.dueDate ?? '',
+        dueTime: task.dueTime ?? '',
+        priority: task.priority ?? 2,
+        notes: task.notes ?? '',
+        recurrence: task.recurrence ?? '',
       });
       setShowEditor(true);
       return;
     }
 
-    const task = await getTask(db, id);
-    if (!task) return;
-    setEditingTask({
-      id: task.id,
-      title: task.title ?? '',
-      pillar: task.pillar ?? 'general',
-      category: task.category ?? '',
-      dueDate: task.dueDate ?? '',
-      dueTime: task.dueTime ?? '',
-      priority: task.priority ?? 2,
-      notes: task.notes ?? '',
-      recurrence: task.recurrence ?? '',
-    });
-    setShowEditor(true);
-  }, [db]);
+    router.push(item.deepLink as any);
+  }, [db, router]);
 
   const saveTask = useCallback(async (data: TaskFormData) => {
     if (!db) return;
 
-    try {
-      if (data.id) {
-        await updateTask(db, data.id, {
-          title: data.title,
-          pillar: data.pillar || 'general',
-          category: data.category || null,
-          dueDate: data.dueDate || null,
-          dueTime: data.dueTime || null,
-          priority: data.priority,
-          notes: data.notes || null,
-          recurrence: data.recurrence || null,
-        });
-      } else {
-        await createTask(db, {
-          title: data.title,
-          pillar: 'general',
-          category: data.category || undefined,
-          dueDate: data.dueDate || undefined,
-          dueTime: data.dueTime || undefined,
-          priority: data.priority,
-          notes: data.notes || undefined,
-          recurrence: data.recurrence || undefined,
-        });
-      }
-      setShowEditor(false);
-      await loadTasks();
-    } catch {
-      Alert.alert('Could not save task', 'Please try again.');
+    if (data.id) {
+      await updateTask(db, data.id, {
+        title: data.title,
+        pillar: data.pillar || 'general',
+        category: data.category || null,
+        dueDate: data.dueDate || null,
+        dueTime: data.dueTime || null,
+        priority: data.priority,
+        notes: data.notes || null,
+        recurrence: data.recurrence || null,
+      });
+    } else {
+      await createTask(db, {
+        title: data.title,
+        pillar: 'general',
+        category: data.category || undefined,
+        dueDate: data.dueDate || undefined,
+        dueTime: data.dueTime || undefined,
+        priority: data.priority,
+        notes: data.notes || undefined,
+        recurrence: data.recurrence || undefined,
+      });
     }
-  }, [db, loadTasks]);
 
-  const confirmDelete = useCallback((task: TTask) => {
-    Alert.alert(
-      'Delete task',
-      `Remove "${task.title ?? 'this task'}"?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            if (!db) return;
-            try {
-              await deleteTask(db, task.id);
-              await loadTasks();
-            } catch {
-              Alert.alert('Could not delete task', 'Please try again.');
-            }
-          },
-        },
-      ],
+    setShowEditor(false);
+    await refreshAmbientState(db);
+    await loadInbox();
+  }, [db, loadInbox]);
+
+  if (!isReady) {
+    return (
+      <View style={[styles.screen, { backgroundColor: themeTokens.background, justifyContent: 'center', alignItems: 'center' }]}>
+        <AppText variant="footnote" color={themeTokens.textSecondary}>
+          Loading inbox...
+        </AppText>
+      </View>
     );
-  }, [db, loadTasks]);
-
-  const visibleTasks = useMemo(
-    () => (showCompleted ? tasks : tasks.filter((task) => !task.completed)),
-    [showCompleted, tasks],
-  );
-
-  const counts = useMemo(() => {
-    const summary = {
-      overdue: 0,
-      today: 0,
-      upcoming: 0,
-      inbox: 0,
-    };
-
-    for (const task of tasks) {
-      if (task.completed) continue;
-      const section = taskSection(task);
-      if (section === 'Overdue') summary.overdue += 1;
-      if (section === 'Today') summary.today += 1;
-      if (section === 'Upcoming') summary.upcoming += 1;
-      if (section === 'Inbox') summary.inbox += 1;
-    }
-
-    return summary;
-  }, [tasks]);
-
-  const sections = useMemo((): Array<SectionListData<TTask>> => {
-    const grouped: Record<TaskSectionKey, TTask[]> = {
-      Overdue: [],
-      Today: [],
-      Upcoming: [],
-      Inbox: [],
-      Completed: [],
-    };
-
-    for (const task of tasks) {
-      const section = taskSection(task);
-      if (section === 'Completed' && !showCompleted) continue;
-      if (section !== 'Completed' && task.completed) continue;
-      grouped[section].push(task);
-    }
-
-    return SECTION_ORDER
-      .filter((key) => grouped[key].length > 0)
-      .map((key) => ({
-        title: key,
-        data: grouped[key].slice().sort(compareTasks),
-      }));
-  }, [showCompleted, tasks]);
-
-  const calendarSections = useMemo((): Array<SectionListData<TTask>> => {
-    const dayTasks = visibleTasks
-      .filter((task) => task.dueDate === calendarDate)
-      .slice()
-      .sort(compareTasks);
-
-    return dayTasks.length > 0
-      ? [{ title: formatLongDate(calendarDate), data: dayTasks }]
-      : [];
-  }, [calendarDate, visibleTasks]);
-
-  const remainingCount = tasks.filter((task) => !task.completed).length;
-  const listSections = mode === 'calendar' ? calendarSections : sections;
+  }
 
   return (
     <View style={[styles.screen, { backgroundColor: themeTokens.background }]}>
-      <View
-        style={[
-          styles.header,
-          {
-            paddingTop: insets.top + space[8],
-            borderBottomColor: themeTokens.border,
-            backgroundColor: themeTokens.background,
-          },
-        ]}
-      >
-        <View style={styles.headerTop}>
-          <View style={styles.headerCopy}>
-            <AppText variant="title1" style={{ fontWeight: '700' }}>
-              Tasks
-            </AppText>
-            <AppText variant="footnote" color={themeTokens.textSecondary}>
-              {remainingCount} open items across inbox and upcoming days.
-            </AppText>
-          </View>
-          <ModeSwitch mode={mode} onChange={setMode} />
-        </View>
-
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.summaryRow}
-        >
-          {counts.overdue > 0 ? <SummaryCard label="Overdue" value={counts.overdue} icon="alert-circle" /> : null}
-          <SummaryCard label="Today" value={counts.today} icon="sun" />
-          <SummaryCard label="Upcoming" value={counts.upcoming} icon="calendar" />
-          <SummaryCard label="Inbox" value={counts.inbox} icon="inbox" />
-        </ScrollView>
-
-        <View style={styles.toolbar}>
-          <AppText variant="footnote" color={themeTokens.textSecondary}>
-            {mode === 'calendar'
-              ? 'Select a date to review scheduled tasks.'
-              : 'Tap a task to edit it. Long-press to delete.'}
-          </AppText>
-          <Pressable
-            style={[
-              styles.doneToggle,
-              {
-                backgroundColor: showCompleted ? themeTokens.accentTint : themeTokens.surface,
-                borderColor: showCompleted ? themeTokens.accent : themeTokens.border,
-              },
-            ]}
-            onPress={() => setShowCompleted((current) => !current)}
-          >
-            <Feather
-              name={showCompleted ? 'check-circle' : 'circle'}
-              size={14}
-              color={showCompleted ? themeTokens.accent : themeTokens.textSecondary}
-            />
-            <AppText
-              variant="caption1"
-              color={showCompleted ? themeTokens.accent : themeTokens.textSecondary}
-              style={{ fontWeight: '700' }}
-            >
-              Show completed
-            </AppText>
-          </Pressable>
-        </View>
-      </View>
-
-      {mode === 'calendar' ? (
-        <View style={styles.calendarWrap}>
-          <CalendarGrid tasks={visibleTasks} selectedDate={calendarDate} onSelectDate={setCalendarDate} />
-        </View>
-      ) : null}
-
       <SectionList
-        sections={listSections}
+        sections={sections}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
-          <TaskRow
+          <InboxRow
             item={item}
-            onToggle={handleToggle}
-            onPress={openEditor}
-            onDelete={confirmDelete}
+            onOpen={openItem}
+            onComplete={async (target) => {
+              if (!db) return;
+              await completeInboxItem(db, target);
+              await refreshAmbientState(db);
+              await loadInbox();
+            }}
+            onSnooze={async (target) => {
+              await snoozeInboxItem(target, 60);
+              await loadInbox();
+            }}
           />
         )}
         renderSectionHeader={({ section }) => (
@@ -647,41 +311,56 @@ export default function TodosScreen() {
           </View>
         )}
         stickySectionHeadersEnabled
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ padding: space[16], paddingBottom: insets.bottom + 120 }}
-        ListEmptyComponent={(
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={themeTokens.accent} />
+        }
+        contentContainerStyle={{ padding: space[16], paddingTop: insets.top + space[8], paddingBottom: insets.bottom + 120 }}
+        ListHeaderComponent={
+          <View style={styles.headerShell}>
+            <View style={styles.hero}>
+              <View style={styles.heroCopy}>
+                <AppText variant="title1" style={{ fontWeight: '800' }}>
+                  Inbox
+                </AppText>
+                <AppText variant="footnote" color={themeTokens.textSecondary}>
+                  Triage what needs attention across tasks, reminders, sessions, and tracker prompts.
+                </AppText>
+              </View>
+              <Pressable
+                style={[styles.primaryButton, { backgroundColor: themeTokens.accent }]}
+                onPress={() => {
+                  setEditingTask(undefined);
+                  setShowEditor(true);
+                }}
+              >
+                <Feather name="plus" size={16} color="#fff" />
+                <AppText variant="caption1" onAccent style={{ fontWeight: '700' }}>
+                  Task
+                </AppText>
+              </Pressable>
+            </View>
+
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.summaryRow}>
+              <SummaryPill label="tasks" value={stats.tasks} />
+              <SummaryPill label="prompts" value={stats.prompts} />
+              <SummaryPill label="snoozed" value={stats.snoozed} />
+            </ScrollView>
+          </View>
+        }
+        ListEmptyComponent={
           <View style={styles.emptyState}>
             <View style={[styles.emptyIcon, { backgroundColor: themeTokens.accentTint }]}>
-              <Feather name="check-square" size={18} color={themeTokens.accent} />
+              <Feather name="inbox" size={18} color={themeTokens.accent} />
             </View>
             <AppText variant="headline" style={{ fontWeight: '700', textAlign: 'center' }}>
-              {mode === 'calendar' ? 'No tasks on this date' : 'Nothing to work from yet'}
+              Inbox at zero
             </AppText>
             <AppText variant="footnote" color={themeTokens.textSecondary} style={{ textAlign: 'center' }}>
-              {mode === 'calendar'
-                ? 'Pick another date or add something to the planner.'
-                : 'Add a task to your inbox or give it a date so it lands in the timeline.'}
+              No overdue tasks, no pending nudges, and no reminders waiting for you.
             </AppText>
           </View>
-        )}
+        }
       />
-
-      <Pressable
-        style={[
-          styles.fab,
-          {
-            backgroundColor: themeTokens.accent,
-            bottom: insets.bottom + 28,
-            right: space[20],
-          },
-        ]}
-        onPress={() => {
-          setEditingTask(undefined);
-          setShowEditor(true);
-        }}
-      >
-        <Feather name="plus" size={22} color="#fff" />
-      </Pressable>
 
       <TaskEditor
         visible={showEditor}
@@ -699,178 +378,93 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
   },
-  header: {
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: space[16],
-    paddingBottom: space[12],
-    gap: space[12],
+  headerShell: {
+    gap: space[16],
+    paddingBottom: space[8],
   },
-  headerTop: {
+  hero: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: space[12],
   },
-  headerCopy: {
+  heroCopy: {
     flex: 1,
-    gap: space[4],
-  },
-  modeSwitch: {
-    flexDirection: 'row',
-    borderWidth: 1,
-    borderRadius: radius.full,
-    padding: 2,
-    gap: 2,
-  },
-  modeButton: {
-    paddingHorizontal: space[12],
-    paddingVertical: space[8],
-    borderRadius: radius.full,
+    gap: 4,
   },
   summaryRow: {
     gap: space[8],
     paddingRight: space[4],
   },
-  summaryCard: {
-    minWidth: 88,
+  summaryPill: {
+    minWidth: 96,
     borderWidth: 1,
     borderRadius: radius.xl,
     paddingHorizontal: space[12],
     paddingVertical: space[12],
-    gap: space[4],
+    gap: 4,
   },
-  summaryIcon: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  toolbar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: space[12],
-  },
-  doneToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space[4],
-    borderWidth: 1,
+  primaryButton: {
+    minHeight: 40,
     borderRadius: radius.full,
-    paddingHorizontal: space[12],
-    paddingVertical: space[8],
-  },
-  calendarWrap: {
-    paddingHorizontal: space[16],
-    paddingTop: space[16],
-  },
-  calendarCard: {
-    borderWidth: 1,
-    borderRadius: radius.xl,
-    padding: space[16],
-    gap: space[12],
-  },
-  calendarHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  calendarNav: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    borderWidth: 1,
+    paddingHorizontal: space[14],
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  calendarDowRow: {
     flexDirection: 'row',
-  },
-  calendarGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-  },
-  calendarCell: {
-    width: '14.2857%',
-    alignItems: 'center',
-    paddingVertical: space[4],
-  },
-  calendarBadge: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  calendarDots: {
-    flexDirection: 'row',
-    gap: 3,
-    height: 8,
-    marginTop: 2,
-  },
-  calendarDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
+    gap: 6,
   },
   sectionHeader: {
-    paddingBottom: space[8],
     paddingTop: space[16],
+    paddingBottom: space[8],
   },
-  taskRow: {
+  rowCard: {
     borderWidth: 1,
     borderRadius: radius.xl,
-    paddingHorizontal: space[12],
-    paddingVertical: space[12],
-    flexDirection: 'row',
-    alignItems: 'center',
+    padding: space[14],
     gap: space[12],
     marginBottom: space[8],
   },
-  checkbox: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    borderWidth: 1.5,
+  rowTop: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: space[12],
+  },
+  rowIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    flexShrink: 0,
   },
-  taskCopy: {
+  rowCopy: {
     flex: 1,
-    gap: space[4],
+    gap: 4,
   },
-  taskMeta: {
-    alignItems: 'center',
+  rowActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: space[8],
   },
-  priorityDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  completedText: {
-    textDecorationLine: 'line-through',
+  inlineAction: {
+    minHeight: 38,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    paddingHorizontal: space[12],
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
   },
   emptyState: {
     alignItems: 'center',
     gap: space[8],
-    paddingTop: space[48],
+    paddingTop: space[56],
     paddingHorizontal: space[24],
   },
   emptyIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  fab: {
-    position: 'absolute',
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     alignItems: 'center',
     justifyContent: 'center',
   },

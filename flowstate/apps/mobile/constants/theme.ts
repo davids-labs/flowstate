@@ -11,13 +11,18 @@
 export const space = {
   2: 2,
   4: 4,
+  6: 6,
   8: 8,
+  10: 10,
   12: 12,
+  14: 14,
   16: 16,
   20: 20,
   24: 24,
   32: 32,
+  40: 40,
   48: 48,
+  56: 56,
 } as const;
 
 // Legacy aliases kept for unmigrated callers — migrate to `space.*`
