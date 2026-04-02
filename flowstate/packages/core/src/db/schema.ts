@@ -204,6 +204,65 @@ export const moduleReminders = sqliteTable('module_reminders', {
   updatedAt: text('updated_at').notNull().default(''),
 });
 
+// ─── Trackers (V3 reset model) ──────────────────────────────────
+
+export const trackers = sqliteTable('trackers', {
+  id: text('id').primaryKey(),
+  kind: text('kind').notNull(),
+  label: text('label').notNull(),
+  emoji: text('emoji'),
+  config: text('config').notNull().default('{}'),
+  collectionId: text('collection_id').references(() => collections.id),
+  pinRules: text('pin_rules').notNull().default('{}'),
+  metadata: text('metadata').notNull().default('{}'),
+  archivedAt: text('archived_at'),
+  createdAt: text('created_at').notNull().default(''),
+  updatedAt: text('updated_at').notNull().default(''),
+});
+
+export const trackerEntries = sqliteTable('tracker_entries', {
+  id: text('id').primaryKey(),
+  trackerId: text('tracker_id').notNull().references(() => trackers.id),
+  date: text('date').notNull(),
+  valueJson: text('value_json').notNull(),
+  numericValue: real('numeric_value'),
+  booleanValue: integer('boolean_value'),
+  textValue: text('text_value'),
+  mediaCount: integer('media_count').notNull().default(0),
+  loggedAt: text('logged_at').notNull(),
+  sessionId: text('session_id'),
+});
+
+export const trackerSchedules = sqliteTable('tracker_schedules', {
+  id: text('id').primaryKey(),
+  trackerId: text('tracker_id').notNull().references(() => trackers.id),
+  daysOfWeek: text('days_of_week').notNull().default('[]'),
+  timeOfDay: text('time_of_day'),
+  enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+  createdAt: text('created_at').notNull().default(''),
+  updatedAt: text('updated_at').notNull().default(''),
+});
+
+export const trackerReminders = sqliteTable('tracker_reminders', {
+  id: text('id').primaryKey(),
+  trackerId: text('tracker_id').notNull().references(() => trackers.id),
+  daysOfWeek: text('days_of_week').notNull().default('[]'),
+  time: text('time').notNull(),
+  message: text('message'),
+  enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+  createdAt: text('created_at').notNull().default(''),
+  updatedAt: text('updated_at').notNull().default(''),
+});
+
+export const trackerLayouts = sqliteTable('tracker_layouts', {
+  id: text('id').primaryKey(),
+  trackerId: text('tracker_id').notNull().references(() => trackers.id),
+  surface: text('surface').notNull(),
+  zone: text('zone'),
+  order: integer('order').notNull().default(0),
+  size: text('size').notNull().default('compact'),
+});
+
 // ═══════════════════════════════════════════════════════════════
 // V2 NEW TABLES — added in schema version 9
 // ═══════════════════════════════════════════════════════════════

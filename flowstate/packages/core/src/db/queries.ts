@@ -204,6 +204,27 @@ export async function createPlan(
   return id;
 }
 
+export async function getPlan(db: DB, id: string) {
+  const rows = await db.select().from(plans).where(eq(plans.id, id));
+  return rows[0] ?? null;
+}
+
+export async function updatePlan(
+  db: DB,
+  id: string,
+  data: Partial<{ name: string; startDate: string; endDate: string; totalDays: number; sourceFile: string | null }>,
+) {
+  const updateData: Record<string, unknown> = {};
+  if (data.name !== undefined) updateData.name = data.name;
+  if (data.startDate !== undefined) updateData.startDate = data.startDate;
+  if (data.endDate !== undefined) updateData.endDate = data.endDate;
+  if (data.totalDays !== undefined) updateData.totalDays = data.totalDays;
+  if ('sourceFile' in data) updateData.sourceFile = data.sourceFile;
+  if (Object.keys(updateData).length > 0) {
+    await db.update(plans).set(updateData).where(eq(plans.id, id));
+  }
+}
+
 // ─── Day Plans ──────────────────────────────────────────────────
 
 export async function getDayPlan(db: DB, date: string) {
@@ -216,6 +237,34 @@ export async function getDayPlan(db: DB, date: string) {
     mustDoDone: JSON.parse(row.mustDoDone),
     moduleIds: JSON.parse(row.moduleIds),
   };
+}
+
+export async function getDayPlanById(db: DB, id: string) {
+  const rows = await db.select().from(dayPlans).where(eq(dayPlans.id, id));
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    ...row,
+    mustDo: JSON.parse(row.mustDo),
+    mustDoDone: JSON.parse(row.mustDoDone),
+    moduleIds: JSON.parse(row.moduleIds),
+  };
+}
+
+export async function getDayPlansByIds(db: DB, ids: string[]) {
+  if (ids.length === 0) return [];
+  const rows = await db
+    .select()
+    .from(dayPlans)
+    .where(inArray(dayPlans.id, ids))
+    .orderBy(asc(dayPlans.date));
+
+  return rows.map((row: any) => ({
+    ...row,
+    mustDo: JSON.parse(row.mustDo),
+    mustDoDone: JSON.parse(row.mustDoDone),
+    moduleIds: JSON.parse(row.moduleIds),
+  }));
 }
 
 export async function getDayPlansInRange(db: DB, startDate: string, endDate: string) {
@@ -242,6 +291,7 @@ export async function upsertDayPlan(
     date: string;
     title: string;
     planId?: string;
+    csvPlanId?: string | null;
     dayNumber?: number;
     totalDays?: number;
     status?: string;
@@ -255,16 +305,23 @@ export async function upsertDayPlan(
   const now = nowISO();
 
   if (existing) {
-    // Only update plan fields, never overwrite logged values (mustDoDone)
+    const nextMustDo = data.mustDo ?? existing.mustDo;
+    const nextMustDoDone = data.mustDoDone ?? existing.mustDoDone;
+    const nextModuleIds = data.moduleIds ?? existing.moduleIds;
+
     await db
       .update(dayPlans)
       .set({
         title: data.title,
         planId: data.planId ?? existing.planId,
+        csvPlanId: data.csvPlanId ?? existing.csvPlanId ?? null,
         dayNumber: data.dayNumber ?? existing.dayNumber,
         totalDays: data.totalDays ?? existing.totalDays,
-        mustDo: data.mustDo ? JSON.stringify(data.mustDo) : existing.mustDo,
-        moduleIds: data.moduleIds ? JSON.stringify(data.moduleIds) : JSON.stringify(existing.moduleIds),
+        status: data.status ?? existing.status,
+        mustDo: JSON.stringify(nextMustDo),
+        mustDoDone: JSON.stringify(nextMustDoDone),
+        moduleIds: JSON.stringify(nextModuleIds),
+        notes: data.notes ?? existing.notes ?? null,
         updatedAt: now,
       })
       .where(eq(dayPlans.id, existing.id));
@@ -274,6 +331,7 @@ export async function upsertDayPlan(
     await db.insert(dayPlans).values({
       id,
       planId: data.planId ?? null,
+      csvPlanId: data.csvPlanId ?? null,
       date: data.date,
       title: data.title,
       dayNumber: data.dayNumber ?? null,
@@ -288,6 +346,38 @@ export async function upsertDayPlan(
     });
     return id;
   }
+}
+
+export async function updateDayPlan(
+  db: DB,
+  id: string,
+  data: Partial<{
+    date: string;
+    title: string;
+    planId: string | null;
+    csvPlanId: string | null;
+    dayNumber: number | null;
+    totalDays: number | null;
+    status: string;
+    mustDo: string[];
+    mustDoDone: boolean[];
+    moduleIds: string[];
+    notes: string | null;
+  }>,
+) {
+  const updateData: Record<string, unknown> = { updatedAt: nowISO() };
+  if (data.date !== undefined) updateData.date = data.date;
+  if (data.title !== undefined) updateData.title = data.title;
+  if ('planId' in data) updateData.planId = data.planId;
+  if ('csvPlanId' in data) updateData.csvPlanId = data.csvPlanId;
+  if ('dayNumber' in data) updateData.dayNumber = data.dayNumber;
+  if ('totalDays' in data) updateData.totalDays = data.totalDays;
+  if (data.status !== undefined) updateData.status = data.status;
+  if (data.mustDo !== undefined) updateData.mustDo = JSON.stringify(data.mustDo);
+  if (data.mustDoDone !== undefined) updateData.mustDoDone = JSON.stringify(data.mustDoDone);
+  if (data.moduleIds !== undefined) updateData.moduleIds = JSON.stringify(data.moduleIds);
+  if ('notes' in data) updateData.notes = data.notes;
+  await db.update(dayPlans).set(updateData).where(eq(dayPlans.id, id));
 }
 
 export async function updateMustDoDone(db: DB, dayPlanId: string, mustDoDone: boolean[]) {
@@ -360,6 +450,9 @@ export async function createModuleSpec(
     showInSummary?: boolean;
     collectionId?: string | null;
     metadata?: Record<string, unknown>;
+    pillar?: string;
+    streakEnabled?: number;
+    streakCheckInTime?: string | null;
   },
 ) {
   const now = nowISO();
@@ -369,6 +462,9 @@ export async function createModuleSpec(
     placements: JSON.stringify(data.placements),
     collectionId: data.collectionId ?? null,
     metadata: JSON.stringify(data.metadata ?? {}),
+    pillar: data.pillar ?? 'general',
+    streakEnabled: data.streakEnabled ?? 0,
+    streakCheckInTime: data.streakCheckInTime ?? null,
     createdAt: now,
     updatedAt: now,
   });
@@ -389,6 +485,9 @@ export async function updateModuleSpec(
     collectionId: string | null;
     metadata: Record<string, unknown>;
     archivedAt: string | null;
+    pillar: string;
+    streakEnabled: number;
+    streakCheckInTime: string | null;
   }>,
 ) {
   const updateData: Record<string, unknown> = { updatedAt: nowISO() };
@@ -402,6 +501,9 @@ export async function updateModuleSpec(
   if (data.collectionId !== undefined) updateData.collectionId = data.collectionId;
   if (data.metadata !== undefined) updateData.metadata = JSON.stringify(data.metadata);
   if (data.archivedAt !== undefined) updateData.archivedAt = data.archivedAt;
+  if (data.pillar !== undefined) updateData.pillar = data.pillar;
+  if (data.streakEnabled !== undefined) updateData.streakEnabled = data.streakEnabled;
+  if (data.streakCheckInTime !== undefined) updateData.streakCheckInTime = data.streakCheckInTime;
 
   await db.update(moduleSpecs).set(updateData).where(eq(moduleSpecs.id, id));
 }
@@ -467,7 +569,16 @@ export async function getSession(db: DB, id: string) {
 
 export async function createSession(
   db: DB,
-  data: { dayPlanId?: string; routineId?: string; routineName: string; scheduledTime?: string; moduleId?: string; tags?: string[] },
+  data: {
+    dayPlanId?: string;
+    routineId?: string;
+    routineName: string;
+    scheduledTime?: string;
+    moduleId?: string;
+    tags?: string[];
+    pillar?: string;
+    csvPlanId?: string;
+  },
 ) {
   const id = generateId();
   const now = nowISO();
@@ -483,6 +594,8 @@ export async function createSession(
     currentBlockIndex: 0,
     tags: JSON.stringify(data.tags ?? []),
     photos: JSON.stringify([]),
+    pillar: data.pillar ?? 'general',
+    csvPlanId: data.csvPlanId ?? null,
     createdAt: now,
     updatedAt: now,
   });
@@ -494,7 +607,7 @@ export async function updateSession(
   id: string,
   data: Partial<{
     status: string;
-    scheduledTime: string;
+    scheduledTime: string | null;
     startedAt: string;
     endedAt: string | null;
     totalPausedMs: number;
@@ -640,6 +753,12 @@ export async function importPlan(
     sourceFile,
   });
 
+  // 1b. Also create a csv_plans record so the CSV Plans settings screen can manage it
+  const csvPlanId = await createCsvPlan(db, {
+    name: planName,
+    fileHash: sourceFile,
+  });
+
   // 2. Resolve routines — create stubs for any unknown routines
   const existingRoutines = await getRoutines(db);
   const existingRoutineNames = new Map(existingRoutines.map((r: any) => [r.name.toLowerCase(), r.id]));
@@ -683,6 +802,7 @@ export async function importPlan(
       date: row.date,
       title: row.title,
       planId,
+      csvPlanId,
       dayNumber,
       totalDays,
       status: row.quiet ? 'quiet' : 'planned',
@@ -697,6 +817,7 @@ export async function importPlan(
         dayPlanId,
         routineId,
         routineName: session.label ?? session.routine,
+        csvPlanId,
       });
       sessionsCreated++;
     }
@@ -1341,16 +1462,19 @@ export async function getCsvPlanStats(
   db: DB,
   planId: string,
 ): Promise<{ sessionCount: number; earliestDate: string | null; latestDate: string | null }> {
-  const planSessions = await db
-    .select({ scheduledTime: sessions.scheduledTime, createdAt: sessions.createdAt })
-    .from(sessions)
-    .where(eq(sessions.csvPlanId, planId));
+  const [planSessions, planDays] = await Promise.all([
+    db
+      .select({ id: sessions.id })
+      .from(sessions)
+      .where(eq(sessions.csvPlanId, planId)),
+    db
+      .select({ date: dayPlans.date })
+      .from(dayPlans)
+      .where(eq(dayPlans.csvPlanId, planId))
+      .orderBy(asc(dayPlans.date)),
+  ]);
 
-  if (planSessions.length === 0) {
-    return { sessionCount: 0, earliestDate: null, latestDate: null };
-  }
-
-  const dates = planSessions.map(s => s.createdAt).filter(Boolean).sort();
+  const dates = planDays.map((day: { date: string }) => day.date).filter(Boolean).sort();
   return {
     sessionCount: planSessions.length,
     earliestDate: dates[0] ?? null,
@@ -1366,7 +1490,7 @@ export async function getCsvPlanConflicts(db: DB): Promise<number> {
   const activePlans = await db.select().from(csvPlans).where(eq(csvPlans.isActive, 1));
   if (activePlans.length < 2) return 0;
 
-  const planIds = activePlans.map(p => p.id);
+  const planIds = activePlans.map((p: any) => p.id);
   const allSessions = await db
     .select({
       id: sessions.id,
@@ -1375,12 +1499,25 @@ export async function getCsvPlanConflicts(db: DB): Promise<number> {
       dayPlanId: sessions.dayPlanId,
     })
     .from(sessions)
-    .where(sql`${sessions.csvPlanId} IN (${sql.raw(planIds.map(id => `'${id}'`).join(','))})`);
+    .where(sql`${sessions.csvPlanId} IN (${sql.raw(planIds.map((id: string) => `'${id}'`).join(','))})`);
 
-  // Group by dayPlanId + scheduledTime and check for multi-plan overlap
+  const linkedDayPlanIds = Array.from(
+    new Set(allSessions.map((session: any) => session.dayPlanId).filter(Boolean)),
+  ) as string[];
+  const linkedDays = linkedDayPlanIds.length > 0
+    ? await db
+        .select({ id: dayPlans.id, date: dayPlans.date })
+        .from(dayPlans)
+        .where(inArray(dayPlans.id, linkedDayPlanIds))
+    : [];
+  const dayDateById = Object.fromEntries(linkedDays.map((day: { id: string; date: string }) => [day.id, day.date]));
+
+  // Group by actual date + time and check for multi-plan overlap
   const timeSlots: Record<string, Set<string>> = {};
   for (const s of allSessions) {
-    const key = `${s.dayPlanId ?? ''}__${s.scheduledTime ?? ''}`;
+    const date = s.dayPlanId ? dayDateById[s.dayPlanId] : null;
+    if (!date || !s.scheduledTime) continue;
+    const key = `${date}__${s.scheduledTime}`;
     if (!timeSlots[key]) timeSlots[key] = new Set();
     if (s.csvPlanId) timeSlots[key].add(s.csvPlanId);
   }
@@ -1390,6 +1527,122 @@ export async function getCsvPlanConflicts(db: DB): Promise<number> {
     if (plans.size > 1) conflicts++;
   }
   return conflicts;
+}
+
+export async function getImportedPlanBundle(
+  db: DB,
+  csvPlanId: string,
+): Promise<{
+  csvPlan: any;
+  plan: any | null;
+  days: Array<{
+    id: string;
+    date: string;
+    title: string;
+    planId: string | null;
+    csvPlanId: string | null;
+    dayNumber: number | null;
+    totalDays: number | null;
+    status: string;
+    mustDo: string[];
+    mustDoDone: boolean[];
+    moduleIds: string[];
+    notes: string | null;
+    sessions: Array<{
+      id: string;
+      routineId: string | null;
+      routineName: string;
+      scheduledTime: string | null;
+      status: string;
+    }>;
+  }>;
+} | null> {
+  const csvRows = await db.select().from(csvPlans).where(eq(csvPlans.id, csvPlanId));
+  const csvPlan = csvRows[0];
+  if (!csvPlan) return null;
+
+  const csvSessions = await db
+    .select()
+    .from(sessions)
+    .where(eq(sessions.csvPlanId, csvPlanId))
+    .orderBy(asc(sessions.scheduledTime), asc(sessions.createdAt));
+
+  const linkedDayPlanIds = Array.from(
+    new Set(
+      csvSessions
+        .map((session: any) => session.dayPlanId)
+        .filter((dayPlanId: string | null) => Boolean(dayPlanId)),
+    ),
+  ) as string[];
+
+  const linkedDays = await getDayPlansByIds(db, linkedDayPlanIds);
+
+  let plan: any | null = null;
+  let planDays = linkedDays;
+
+  const inferredPlanId =
+    linkedDays.find((day: any) => day.planId)?.planId ??
+    null;
+
+  if (inferredPlanId) {
+    plan = await getPlan(db, inferredPlanId);
+    const rows = await db
+      .select()
+      .from(dayPlans)
+      .where(eq(dayPlans.planId, inferredPlanId))
+      .orderBy(asc(dayPlans.date));
+    if (rows.length > 0) {
+      planDays = rows.map((row: any) => ({
+        ...row,
+        mustDo: JSON.parse(row.mustDo),
+        mustDoDone: JSON.parse(row.mustDoDone),
+        moduleIds: JSON.parse(row.moduleIds),
+      }));
+    }
+  } else {
+    const rows = await db
+      .select()
+      .from(dayPlans)
+      .where(eq(dayPlans.csvPlanId, csvPlanId))
+      .orderBy(asc(dayPlans.date));
+    if (rows.length > 0) {
+      planDays = rows.map((row: any) => ({
+        ...row,
+        mustDo: JSON.parse(row.mustDo),
+        mustDoDone: JSON.parse(row.mustDoDone),
+        moduleIds: JSON.parse(row.moduleIds),
+      }));
+    }
+  }
+
+  const sessionsByDayPlanId: Record<string, Array<{
+    id: string;
+    routineId: string | null;
+    routineName: string;
+    scheduledTime: string | null;
+    status: string;
+  }>> = {};
+
+  for (const session of csvSessions as any[]) {
+    if (!session.dayPlanId) continue;
+    if (!sessionsByDayPlanId[session.dayPlanId]) sessionsByDayPlanId[session.dayPlanId] = [];
+    sessionsByDayPlanId[session.dayPlanId].push({
+      id: session.id,
+      routineId: session.routineId ?? null,
+      routineName: session.routineName,
+      scheduledTime: session.scheduledTime ?? null,
+      status: session.status,
+    });
+  }
+
+  return {
+    csvPlan,
+    plan,
+    days: planDays.map((day: any) => ({
+      ...day,
+      sessions: sessionsByDayPlanId[day.id] ?? [],
+    })),
+  };
 }
 
 // ─── Gym Volume & PR Queries (Feature 9) ────────────────────────
@@ -1405,7 +1658,7 @@ export async function getVolumeByLift(
 ): Promise<Array<{ moduleId: string; label: string; primaryLift: string; date: string; totalVolume: number }>> {
   // Get all data_input modules with primaryLift
   const specs = await db.select().from(moduleSpecs).where(eq(moduleSpecs.type, 'data_input'));
-  const liftModules = specs.filter((s) => {
+  const liftModules = specs.filter((s: any) => {
     const cfg = typeof s.config === 'string' ? JSON.parse(s.config) : (s.config ?? {});
     return !!cfg.primaryLift;
   });
@@ -1458,7 +1711,7 @@ export async function getPRsAllLifts(
   db: DB,
 ): Promise<Array<{ moduleId: string; label: string; primaryLift: string; maxValue: number; date: string }>> {
   const specs = await db.select().from(moduleSpecs).where(eq(moduleSpecs.type, 'data_input'));
-  const liftModules = specs.filter((s) => {
+  const liftModules = specs.filter((s: any) => {
     const cfg = typeof s.config === 'string' ? JSON.parse(s.config) : (s.config ?? {});
     return !!cfg.primaryLift;
   });

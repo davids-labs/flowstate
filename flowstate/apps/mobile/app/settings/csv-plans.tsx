@@ -1,22 +1,13 @@
 /**
- * CSV Plans Manager (Part 7)
+ * CSV Plans Manager — V2 spec §9.5
  *
- * Settings > CSV Plans — power-user screen for managing multiple imported
- * CSV training plans as toggleable layers.
- *
- * Features:
- * - List all CSV plans with name, upload date, session count, date range, toggle
- * - Toggle plans active/inactive (hides sessions from timeline without deleting)
- * - Edit: rename, change description
- * - Delete: permanently removes plan + all its sessions
- * - Import: '+' button links to existing import flow
- * - Conflict detection: warns when multiple active plans overlap
+ * Plan list with surfaceElevated cards, active toggle Switch, conflict banner.
+ * Long-press card → Rename / Delete.
+ * '+' FAB → /import/pick.
  */
-
 import React, { useState, useCallback } from 'react';
 import {
   View,
-  Text,
   Pressable,
   StyleSheet,
   Switch,
@@ -25,11 +16,15 @@ import {
   Modal,
   ScrollView,
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
-import { fontSize, spacing, borderRadius } from '../../constants/theme';
+import { space, radius } from '../../constants/theme';
 import { useTheme } from '../../constants/ThemeContext';
+import { AppText } from '../../components/primitives/Text';
 import { useDatabaseSafe } from '../../components/DatabaseProvider';
 import {
   getCsvPlans,
@@ -53,19 +48,272 @@ interface PlanItem {
   latestDate: string | null;
 }
 
+function formatDate(iso?: string | null): string {
+  if (!iso) return '—';
+  return iso.slice(0, 10).replace(/-/g, '/');
+}
+
+// ─── Rename modal ─────────────────────────────────────────────────────────────
+function RenameModal({
+  visible,
+  plan,
+  onSave,
+  onClose,
+}: {
+  visible: boolean;
+  plan: PlanItem | null;
+  onSave: (name: string, desc: string) => void;
+  onClose: () => void;
+}) {
+  const { themeTokens } = useTheme();
+  const [name, setName] = useState(plan?.name ?? '');
+  const [desc, setDesc] = useState(plan?.description ?? '');
+
+  React.useEffect(() => {
+    setName(plan?.name ?? '');
+    setDesc(plan?.description ?? '');
+  }, [plan, visible]);
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+    >
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={{ flex: 1, justifyContent: 'flex-end' }}
+      >
+        <View
+          style={[
+            RM.sheet,
+            {
+              backgroundColor: themeTokens.background,
+              borderColor: themeTokens.border,
+            },
+          ]}
+        >
+          <View style={RM.handle} />
+          <AppText
+            variant="title3"
+            style={{ fontWeight: '700', marginBottom: space[20] }}
+          >
+            Rename Plan
+          </AppText>
+          <TextInput
+            style={[
+              RM.input,
+              {
+                backgroundColor: themeTokens.surface,
+                borderColor: themeTokens.border,
+                color: themeTokens.textPrimary,
+              },
+            ]}
+            value={name}
+            onChangeText={setName}
+            placeholder="Plan name"
+            placeholderTextColor={themeTokens.textTertiary}
+            autoFocus
+          />
+          <TextInput
+            style={[
+              RM.input,
+              {
+                marginTop: space[12],
+                backgroundColor: themeTokens.surface,
+                borderColor: themeTokens.border,
+                color: themeTokens.textPrimary,
+              },
+            ]}
+            value={desc ?? ''}
+            onChangeText={setDesc}
+            placeholder="Description (optional)"
+            placeholderTextColor={themeTokens.textTertiary}
+          />
+          <View
+            style={{ flexDirection: 'row', gap: space[12], marginTop: space[24] }}
+          >
+            <Pressable
+              style={[RM.btn, { backgroundColor: themeTokens.surface, flex: 1 }]}
+              onPress={onClose}
+            >
+              <AppText
+                variant="headline"
+                style={{ fontWeight: '600', color: themeTokens.textSecondary }}
+              >
+                Cancel
+              </AppText>
+            </Pressable>
+            <Pressable
+              style={[RM.btn, { backgroundColor: themeTokens.accent, flex: 2 }]}
+              onPress={() => name.trim() && onSave(name.trim(), desc)}
+            >
+              <AppText
+                variant="headline"
+                style={{ fontWeight: '600', color: '#fff' }}
+              >
+                Save
+              </AppText>
+            </Pressable>
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+const RM = StyleSheet.create({
+  sheet: {
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    margin: space[16],
+    padding: space[24],
+    paddingBottom: space[32],
+  },
+  handle: {
+    width: 32,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#ccc',
+    alignSelf: 'center',
+    marginBottom: space[20],
+  },
+  input: {
+    borderRadius: radius.md,
+    borderWidth: 1,
+    padding: space[12],
+    fontSize: 17,
+  },
+  btn: {
+    borderRadius: radius.md,
+    padding: space[16],
+    alignItems: 'center',
+  },
+});
+
+// ─── Plan card ────────────────────────────────────────────────────────────────
+function PlanCard({
+  plan,
+  onToggle,
+  onEdit,
+  onDelete,
+  onOpen,
+}: {
+  plan: PlanItem;
+  onToggle: (p: PlanItem) => void;
+  onEdit: (p: PlanItem) => void;
+  onDelete: (p: PlanItem) => void;
+  onOpen: (p: PlanItem) => void;
+}) {
+  const { themeTokens } = useTheme();
+  const active = !!plan.isActive;
+  const range =
+    plan.earliestDate && plan.latestDate
+      ? `${formatDate(plan.earliestDate)} – ${formatDate(plan.latestDate)}`
+      : 'No sessions';
+
+  return (
+    <Pressable
+      style={[
+        PC.card,
+        {
+          backgroundColor: themeTokens.surfaceElevated,
+          borderWidth: active ? 2 : 1,
+          borderColor: active ? themeTokens.accent : themeTokens.border,
+        },
+      ]}
+      onPress={() => onOpen(plan)}
+      onLongPress={() =>
+        Alert.alert(plan.name, 'What would you like to do?', [
+          { text: 'Rename', onPress: () => onEdit(plan) },
+          {
+            text: 'Delete',
+            style: 'destructive',
+            onPress: () => onDelete(plan),
+          },
+          { text: 'Cancel', style: 'cancel' },
+        ])
+      }
+    >
+      <View style={PC.top}>
+        <View style={{ flex: 1 }}>
+          <AppText variant="headline" style={{ fontWeight: '600' }} numberOfLines={1}>
+            {plan.name}
+          </AppText>
+          <AppText variant="footnote" color={themeTokens.textTertiary}>
+            Uploaded {formatDate(plan.uploadedAt)}
+          </AppText>
+        </View>
+        <Switch
+          value={active}
+          onValueChange={() => onToggle(plan)}
+          trackColor={{ true: themeTokens.accent }}
+        />
+      </View>
+
+      <View style={[PC.meta, { borderTopColor: themeTokens.border }]}>
+        <View style={PC.metaItem}>
+          <Feather name="calendar" size={13} color={themeTokens.textTertiary} />
+          <AppText variant="footnote" color={themeTokens.textSecondary}>
+            {range}
+          </AppText>
+        </View>
+        <View style={PC.metaItem}>
+          <Feather name="clock" size={13} color={themeTokens.textTertiary} />
+          <AppText variant="footnote" color={themeTokens.textSecondary}>
+            {plan.sessionCount} session{plan.sessionCount !== 1 ? 's' : ''}
+          </AppText>
+        </View>
+      </View>
+
+      {plan.description ? (
+        <AppText
+          variant="footnote"
+          color={themeTokens.textTertiary}
+          style={{ paddingHorizontal: space[16], paddingBottom: space[12] }}
+          numberOfLines={2}
+        >
+          {plan.description}
+        </AppText>
+      ) : null}
+    </Pressable>
+  );
+}
+
+const PC = StyleSheet.create({
+  card: { borderRadius: radius.lg, overflow: 'hidden', marginBottom: space[12] },
+  top: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: space[16],
+    gap: space[12],
+  },
+  meta: {
+    flexDirection: 'row',
+    gap: space[20],
+    paddingHorizontal: space[16],
+    paddingVertical: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  metaItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space[8],
+  },
+});
+
+// ─── Main screen ──────────────────────────────────────────────────────────────
 export default function CsvPlansScreen() {
-  const { themeColors } = useTheme();
+  const { themeTokens } = useTheme();
   const router = useRouter();
   const { db } = useDatabaseSafe();
+  const insets = useSafeAreaInsets();
 
   const [plans, setPlans] = useState<PlanItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [conflicts, setConflicts] = useState(0);
-
-  // Edit modal state
   const [editPlan, setEditPlan] = useState<PlanItem | null>(null);
-  const [editName, setEditName] = useState('');
-  const [editDesc, setEditDesc] = useState('');
 
   const loadPlans = useCallback(async () => {
     if (!db) return;
@@ -73,54 +321,61 @@ export default function CsvPlansScreen() {
     try {
       const raw = await getCsvPlans(db);
       const enriched: PlanItem[] = await Promise.all(
-        raw.map(async (p: any) => {
+        (raw as any[]).map(async (p) => {
           const stats = await getCsvPlanStats(db, p.id);
-          return { ...p, ...stats };
+          return { ...p, ...(stats as any) };
         }),
       );
       setPlans(enriched);
-
       const c = await getCsvPlanConflicts(db);
-      setConflicts(c);
-    } catch (e) {
-      console.error('Failed to load CSV plans:', e);
+      setConflicts(c as number);
+    } catch {
+      // ignore
     } finally {
       setLoading(false);
     }
   }, [db]);
 
-  useFocusEffect(useCallback(() => { loadPlans(); }, [loadPlans]));
+  useFocusEffect(
+    useCallback(() => {
+      loadPlans();
+    }, [loadPlans]),
+  );
 
   const handleToggle = async (plan: PlanItem) => {
     if (!db) return;
     try {
-      if (plan.isActive) {
-        await deactivateCsvPlan(db, plan.id);
-      } else {
-        await activateCsvPlan(db, plan.id);
-      }
+      if (plan.isActive) await deactivateCsvPlan(db, plan.id);
+      else await activateCsvPlan(db, plan.id);
       await loadPlans();
-    } catch (e) {
-      Alert.alert('Error', 'Failed to toggle plan.');
+    } catch {
+      // ignore
     }
+  };
+
+  const handleRename = async (name: string, desc: string) => {
+    if (!db || !editPlan) return;
+    await updateCsvPlan(db, editPlan.id, {
+      name,
+      description: desc || undefined,
+    }).catch(() => {});
+    setEditPlan(null);
+    await loadPlans();
   };
 
   const handleDelete = (plan: PlanItem) => {
     Alert.alert(
       'Delete Plan',
-      `Permanently delete "${plan.name}" and all ${plan.sessionCount} of its sessions? This cannot be undone.`,
+      `Delete "${plan.name}"? This will remove all associated sessions.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
-            if (!db) return;
-            try {
-              await deleteCsvPlan(db, plan.id);
+            if (db) {
+              await deleteCsvPlan(db, plan.id).catch(() => {});
               await loadPlans();
-            } catch (e) {
-              Alert.alert('Error', 'Failed to delete plan.');
             }
           },
         },
@@ -128,269 +383,199 @@ export default function CsvPlansScreen() {
     );
   };
 
-  const openEdit = (plan: PlanItem) => {
-    setEditPlan(plan);
-    setEditName(plan.name);
-    setEditDesc(plan.description ?? '');
-  };
-
-  const handleSaveEdit = async () => {
-    if (!db || !editPlan) return;
-    try {
-      await updateCsvPlan(db, editPlan.id, {
-        name: editName.trim() || editPlan.name,
-        description: editDesc.trim() || undefined,
-      });
-      setEditPlan(null);
-      await loadPlans();
-    } catch (e) {
-      Alert.alert('Error', 'Failed to update plan.');
-    }
-  };
-
   return (
-    <View style={[styles.container, { backgroundColor: themeColors.background }]}>
+    <View style={{ flex: 1, backgroundColor: themeTokens.background }}>
       {/* Header */}
-      <View style={styles.header}>
-        <Pressable onPress={() => router.canGoBack() ? router.back() : router.replace('/settings')}>
-          <Feather name="arrow-left" size={22} color={themeColors.text} />
+      <View
+        style={[
+          HDR.wrap,
+          {
+            paddingTop: insets.top + space[8],
+            backgroundColor: themeTokens.background,
+            borderBottomColor: themeTokens.border,
+          },
+        ]}
+      >
+        <Pressable
+          onPress={() =>
+            router.canGoBack() ? router.back() : router.replace('/settings')
+          }
+          hitSlop={12}
+        >
+          <Feather name="arrow-left" size={22} color={themeTokens.textPrimary} />
         </Pressable>
-        <Text style={[styles.title, { color: themeColors.text }]}>CSV Plans</Text>
-        <Pressable onPress={() => router.push('/import/pick')}>
-          <Feather name="plus" size={22} color={themeColors.accent} />
-        </Pressable>
+        <AppText
+          variant="title1"
+          style={{ fontWeight: '700', flex: 1, marginLeft: space[12] }}
+        >
+          Imported Plans
+        </AppText>
       </View>
 
-      {/* Conflict warning */}
+      {/* Conflict warning banner */}
       {conflicts > 0 && (
-        <View style={[styles.conflictBanner, { backgroundColor: '#FEF3C7' }]}>
-          <Feather name="alert-triangle" size={16} color="#D97706" />
-          <Text style={styles.conflictText}>
-            {conflicts} scheduling conflict{conflicts > 1 ? 's' : ''} detected between active plans
-          </Text>
-        </View>
+        <Pressable
+          style={[
+            BNR.wrap,
+            {
+              backgroundColor: (themeTokens.warning ?? '#f59e0b') + '22',
+              borderColor: themeTokens.warning ?? '#f59e0b',
+              marginHorizontal: space[16],
+              marginTop: space[12],
+            },
+          ]}
+          onPress={() =>
+            Alert.alert(
+              'Plan Conflict',
+              'Two or more active plans overlap on the same dates. Disable one plan to resolve.',
+            )
+          }
+        >
+          <Feather
+            name="alert-triangle"
+            size={16}
+            color={themeTokens.warning ?? '#f59e0b'}
+          />
+          <AppText
+            variant="footnote"
+            style={{
+              fontWeight: '600',
+              color: themeTokens.warning ?? '#f59e0b',
+              flex: 1,
+            }}
+          >
+            {conflicts} conflict{conflicts !== 1 ? 's' : ''} detected between
+            active plans.
+          </AppText>
+          <Feather
+            name="chevron-right"
+            size={16}
+            color={themeTokens.warning ?? '#f59e0b'}
+          />
+        </Pressable>
       )}
 
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        {loading ? (
-          <ActivityIndicator color={themeColors.accent} style={{ marginTop: 40 }} />
-        ) : plans.length === 0 ? (
-          <View style={styles.emptyState}>
-            <Feather name="file-text" size={48} color={themeColors.muted} />
-            <Text style={[styles.emptyTitle, { color: themeColors.text }]}>No CSV Plans</Text>
-            <Text style={[styles.emptyHint, { color: themeColors.muted }]}>
-              Import a CSV training plan to get started. Each imported file becomes a named, toggleable plan layer.
-            </Text>
-            <Pressable
-              style={[styles.importBtn, { backgroundColor: themeColors.accent }]}
-              onPress={() => router.push('/import/pick')}
-            >
-              <Feather name="upload" size={16} color={themeColors.white} />
-              <Text style={[styles.importBtnText, { color: themeColors.white }]}>Import Plan</Text>
-            </Pressable>
-          </View>
-        ) : (
-          plans.map((plan) => (
-            <View key={plan.id} style={[styles.planCard, { backgroundColor: themeColors.surface }]}>
-              <View style={styles.planHeader}>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.planName, { color: themeColors.text }]}>{plan.name}</Text>
-                  {plan.description ? (
-                    <Text style={[styles.planDesc, { color: themeColors.muted }]}>{plan.description}</Text>
-                  ) : null}
-                </View>
-                <Switch
-                  value={!!plan.isActive}
-                  onValueChange={() => handleToggle(plan)}
-                  trackColor={{ true: themeColors.accent }}
-                />
-              </View>
-
-              <View style={styles.planMeta}>
-                <Text style={[styles.metaText, { color: themeColors.muted }]}>
-                  {plan.sessionCount} session{plan.sessionCount !== 1 ? 's' : ''}
-                </Text>
-                {plan.earliestDate && plan.latestDate && (
-                  <Text style={[styles.metaText, { color: themeColors.muted }]}>
-                    {plan.earliestDate.slice(0, 10)} → {plan.latestDate.slice(0, 10)}
-                  </Text>
-                )}
-                <Text style={[styles.metaText, { color: themeColors.muted }]}>
-                  Uploaded {plan.uploadedAt.slice(0, 10)}
-                </Text>
-              </View>
-
-              <View style={styles.planActions}>
-                <Pressable style={[styles.actionBtn, { borderColor: themeColors.border }]} onPress={() => openEdit(plan)}>
-                  <Feather name="edit-2" size={14} color={themeColors.accent} />
-                  <Text style={[styles.actionText, { color: themeColors.accent }]}>Edit</Text>
-                </Pressable>
-                <Pressable style={[styles.actionBtn, { borderColor: themeColors.border }]} onPress={() => router.push('/import/pick')}>
-                  <Feather name="refresh-cw" size={14} color={themeColors.accent} />
-                  <Text style={[styles.actionText, { color: themeColors.accent }]}>Re-import</Text>
-                </Pressable>
-                <Pressable style={[styles.actionBtn, { borderColor: themeColors.danger }]} onPress={() => handleDelete(plan)}>
-                  <Feather name="trash-2" size={14} color={themeColors.danger} />
-                  <Text style={[styles.actionText, { color: themeColors.danger }]}>Delete</Text>
-                </Pressable>
-              </View>
-
-              {!plan.isActive && (
-                <View style={[styles.inactiveBadge, { backgroundColor: themeColors.surfaceBorder }]}>
-                  <Text style={[styles.inactiveBadgeText, { color: themeColors.muted }]}>Inactive — sessions hidden from timeline</Text>
-                </View>
-              )}
-            </View>
-          ))
-        )}
-
-        <View style={{ height: 40 }} />
-      </ScrollView>
-
-      {/* Edit Modal */}
-      <Modal visible={!!editPlan} transparent animationType="slide">
-        <Pressable style={styles.modalOverlay} onPress={() => setEditPlan(null)} />
-        <View style={[styles.modalSheet, { backgroundColor: themeColors.background }]}>
-          <Text style={[styles.modalTitle, { color: themeColors.text }]}>Edit Plan</Text>
-
-          <Text style={[styles.fieldLabel, { color: themeColors.muted }]}>Name</Text>
-          <TextInput
-            style={[styles.input, { backgroundColor: themeColors.surface, borderColor: themeColors.border, color: themeColors.text }]}
-            value={editName}
-            onChangeText={setEditName}
-            placeholder="Plan name"
-            placeholderTextColor={themeColors.muted}
-          />
-
-          <Text style={[styles.fieldLabel, { color: themeColors.muted }]}>Description</Text>
-          <TextInput
-            style={[styles.input, { height: 80, textAlignVertical: 'top', backgroundColor: themeColors.surface, borderColor: themeColors.border, color: themeColors.text }]}
-            value={editDesc}
-            onChangeText={setEditDesc}
-            placeholder="Optional description"
-            placeholderTextColor={themeColors.muted}
-            multiline
-          />
-
-          <View style={styles.modalActions}>
-            <Pressable style={[styles.modalCancel, { borderColor: themeColors.border }]} onPress={() => setEditPlan(null)}>
-              <Text style={[styles.modalCancelText, { color: themeColors.text }]}>Cancel</Text>
-            </Pressable>
-            <Pressable style={[styles.modalConfirm, { backgroundColor: themeColors.accent }]} onPress={handleSaveEdit}>
-              <Text style={[styles.modalConfirmText, { color: themeColors.white }]}>Save</Text>
-            </Pressable>
-          </View>
+      {loading ? (
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+          <ActivityIndicator color={themeTokens.accent} />
         </View>
-      </Modal>
+      ) : (
+        <ScrollView
+          contentContainerStyle={{
+            padding: space[16],
+            paddingBottom: insets.bottom + 100,
+          }}
+          showsVerticalScrollIndicator={false}
+        >
+          {plans.length === 0 ? (
+            <View
+              style={[
+                EMPTY.wrap,
+                {
+                  backgroundColor: themeTokens.surface,
+                  borderColor: themeTokens.border,
+                },
+              ]}
+            >
+              <Feather name="file-text" size={28} color={themeTokens.textTertiary} />
+              <AppText
+                variant="body"
+                color={themeTokens.textTertiary}
+                style={{ textAlign: 'center', marginTop: space[8] }}
+              >
+                No imported plans yet.
+              </AppText>
+              <AppText
+                variant="footnote"
+                color={themeTokens.textTertiary}
+                style={{ textAlign: 'center', marginTop: space[4] }}
+              >
+                Import a planner CSV, then tighten dates, titles, priorities, and sessions in-app.
+              </AppText>
+              <Pressable onPress={() => router.push('/import/pick')}>
+                <AppText
+                  variant="footnote"
+                  color={themeTokens.accent}
+                  style={{ marginTop: space[8] }}
+                >
+                  Import your first plan →
+                </AppText>
+              </Pressable>
+            </View>
+          ) : (
+            plans.map((p) => (
+              <PlanCard
+                key={p.id}
+                plan={p}
+                onToggle={handleToggle}
+                onEdit={setEditPlan}
+                onDelete={handleDelete}
+                onOpen={(plan) => router.push(`/imported-plans/${plan.id}` as any)}
+              />
+            ))
+          )}
+        </ScrollView>
+      )}
+
+      {/* FAB */}
+      <Pressable
+        style={[
+          FAB.btn,
+          {
+            backgroundColor: themeTokens.accent,
+            bottom: insets.bottom + 24,
+            right: space[20],
+          },
+        ]}
+        onPress={() => router.push('/import/pick')}
+      >
+        <Feather name="plus" size={24} color="#fff" />
+      </Pressable>
+
+      <RenameModal
+        visible={!!editPlan}
+        plan={editPlan}
+        onSave={handleRename}
+        onClose={() => setEditPlan(null)}
+      />
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1 },
-  header: {
+const HDR = StyleSheet.create({
+  wrap: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing.md,
-    paddingTop: 56,
-    paddingBottom: spacing.sm,
+    paddingHorizontal: space[16],
+    paddingBottom: space[12],
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  title: { fontSize: fontSize.xl, fontWeight: '700' },
-  conflictBanner: {
+});
+const BNR = StyleSheet.create({
+  wrap: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
-    marginHorizontal: spacing.md,
-    padding: spacing.sm,
-    borderRadius: borderRadius.sm,
-    marginBottom: spacing.sm,
-  },
-  conflictText: { fontSize: fontSize.sm, color: '#D97706', fontWeight: '500', flex: 1 },
-  content: { paddingHorizontal: spacing.md, paddingTop: spacing.sm },
-  emptyState: { alignItems: 'center', paddingTop: 60, gap: spacing.sm },
-  emptyTitle: { fontSize: fontSize.lg, fontWeight: '700' },
-  emptyHint: { fontSize: fontSize.sm, textAlign: 'center', paddingHorizontal: spacing.lg },
-  importBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.lg,
-    borderRadius: borderRadius.md,
-    marginTop: spacing.sm,
-  },
-  importBtnText: { fontSize: fontSize.md, fontWeight: '600' },
-  planCard: {
-    borderRadius: borderRadius.md,
-    padding: spacing.md,
-    marginBottom: spacing.md,
-  },
-  planHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-  },
-  planName: { fontSize: fontSize.md, fontWeight: '700' },
-  planDesc: { fontSize: fontSize.sm, marginTop: 2 },
-  planMeta: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-    marginTop: spacing.sm,
-  },
-  metaText: { fontSize: fontSize.xs },
-  planActions: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    marginTop: spacing.sm,
-  },
-  actionBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.sm,
-    borderRadius: borderRadius.sm,
+    gap: space[8],
+    padding: space[12],
+    borderRadius: radius.md,
     borderWidth: 1,
   },
-  actionText: { fontSize: fontSize.xs, fontWeight: '600' },
-  inactiveBadge: {
-    marginTop: spacing.sm,
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.sm,
-    borderRadius: borderRadius.sm,
-  },
-  inactiveBadgeText: { fontSize: fontSize.xs, textAlign: 'center' },
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' },
-  modalSheet: {
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: spacing.lg,
-    paddingBottom: spacing.xxl,
-  },
-  modalTitle: { fontSize: fontSize.xl, fontWeight: '700', marginBottom: spacing.md },
-  fieldLabel: { fontSize: fontSize.sm, fontWeight: '600', marginTop: spacing.md, marginBottom: spacing.xs },
-  input: {
-    borderRadius: borderRadius.sm,
+});
+const EMPTY = StyleSheet.create({
+  wrap: {
+    borderRadius: radius.md,
     borderWidth: 1,
-    padding: spacing.sm,
-    fontSize: fontSize.md,
-  },
-  modalActions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.lg },
-  modalCancel: {
-    flex: 1,
-    borderRadius: borderRadius.md,
-    paddingVertical: spacing.sm + 2,
     alignItems: 'center',
-    borderWidth: 1,
+    padding: space[24],
   },
-  modalCancelText: { fontSize: fontSize.md, fontWeight: '600' },
-  modalConfirm: {
-    flex: 1,
-    borderRadius: borderRadius.md,
-    paddingVertical: spacing.sm + 2,
+});
+const FAB = StyleSheet.create({
+  btn: {
+    position: 'absolute',
+    width: 56,
+    height: 56,
+    borderRadius: 28,
     alignItems: 'center',
+    justifyContent: 'center',
   },
-  modalConfirmText: { fontSize: fontSize.md, fontWeight: '600' },
 });

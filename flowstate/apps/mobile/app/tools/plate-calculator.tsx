@@ -1,426 +1,511 @@
 /**
- * Feature 10 - Plate Calculator
+ * Plate Calculator — V2 spec §9.3
  *
- * Accessible from the Gym stats screen and as a floating tool within
- * any active gym session. Takes a target weight and bar weight, outputs
- * the plates to load on each side, and generates warm-up sets at 50%,
- * 70%, and 90% of working weight.
- *
- * Unit system: kg / lb toggle. Defaults to kg.
+ * Large numeric target weight input (centred, auto-focused).
+ * Bar weight row below.
+ * Coloured plate stack output (per side).
+ * Warm-up table: 50% · 70% · 90%.
+ * kg / lb pill toggle in header.
  */
-
-import React, { useState, useCallback } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View,
-  Text,
-  TextInput,
   Pressable,
   StyleSheet,
   ScrollView,
+  TextInput,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { fontSize, spacing, borderRadius } from '../../constants/theme';
+import { space, radius } from '../../constants/theme';
 import { useTheme } from '../../constants/ThemeContext';
+import { AppText } from '../../components/primitives/Text';
+import { useUserPrefsStore } from '../../stores/userPrefsStore';
 
-// ─── Plate sets ────────────────────────────────────────────────
-
+// ─── Config ───────────────────────────────────────────────────────────────────
 const KG_PLATES = [25, 20, 15, 10, 5, 2.5, 1.25];
 const LB_PLATES = [45, 35, 25, 10, 5, 2.5];
-
 const DEFAULT_BAR_KG = 20;
 const DEFAULT_BAR_LB = 45;
+
+const PLATE_COLOURS: Record<number, string> = {
+  25: '#E53E3E', // Red 25kg / 25lb
+  45: '#E53E3E', // Red 45lb
+  20: '#3B82F6', // Blue 20kg
+  35: '#3182CE', // Blue 35lb
+  15: '#F59E0B', // Yellow 15kg
+  10: '#22C55E', // Green 10kg
+  5: '#9CA3AF',  // Grey 5kg/lb
+  2.5: '#B45309', // Bronze 2.5kg/lb
+  1.25: '#6B7280', // Dark grey 1.25kg
+};
+
+function plateColor(plate: number): string {
+  return PLATE_COLOURS[plate] ?? '#6B7280';
+}
 
 interface PlateRow {
   plate: number;
   count: number;
 }
 
-function calculatePlates(targetWeight: number, barWeight: number, plates: number[]): PlateRow[] {
-  const sideWeight = (targetWeight - barWeight) / 2;
-  if (sideWeight <= 0) return [];
-
-  let remaining = sideWeight;
+function calculatePlates(
+  target: number,
+  bar: number,
+  availablePlates: number[],
+): PlateRow[] {
+  const side = (target - bar) / 2;
+  if (side <= 0) return [];
+  let rem = side;
   const result: PlateRow[] = [];
-
-  for (const plate of plates) {
-    if (remaining <= 0) break;
-    const count = Math.floor(remaining / plate);
+  for (const p of availablePlates) {
+    const count = Math.floor(rem / p + 0.001);
     if (count > 0) {
-      result.push({ plate, count });
-      remaining -= count * plate;
-      remaining = Math.round(remaining * 1000) / 1000; // floating point guard
+      result.push({ plate: p, count });
+      rem = Math.round((rem - count * p) * 1000) / 1000;
     }
   }
-
   return result;
 }
 
-interface WarmupSet {
-  pct: number;
-  weight: number;
-  plates: PlateRow[];
-}
-
-function generateWarmups(targetWeight: number, barWeight: number, plates: number[]): WarmupSet[] {
-  const pcts = [0.5, 0.7, 0.9];
-  return pcts.map((pct) => {
-    const weight = Math.round((targetWeight * pct) / 2.5) * 2.5; // round to nearest 2.5
+function generateWarmups(target: number, bar: number, availablePlates: number[]) {
+  return [0.5, 0.7, 0.9].map((pct) => {
+    const w = Math.round((target * pct) / 2.5) * 2.5;
     return {
       pct,
-      weight,
-      plates: calculatePlates(weight, barWeight, plates),
+      weight: w,
+      plates: calculatePlates(w, bar, availablePlates),
     };
   });
 }
 
+// ─── Plate stack visual ───────────────────────────────────────────────────────
+function PlateStack({ rows }: { rows: PlateRow[] }) {
+  if (rows.length === 0) return null;
+  const allPlates: number[] = [];
+  for (const r of rows) {
+    for (let i = 0; i < r.count; i++) allPlates.push(r.plate);
+  }
+  return (
+    <View style={PS.row}>
+      {allPlates.map((p, i) => (
+        <View
+          key={i}
+          style={[
+            PS.plate,
+            {
+              backgroundColor: plateColor(p),
+              height: Math.max(20, 14 + p * 0.5),
+              width: Math.max(20, p * 0.7),
+            },
+          ]}
+        >
+          <AppText variant="caption2" style={{ color: '#fff', fontWeight: '700' }}>
+            {p}
+          </AppText>
+        </View>
+      ))}
+    </View>
+  );
+}
+const PS = StyleSheet.create({
+  row: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 3,
+    justifyContent: 'center',
+    minHeight: 40,
+    flexWrap: 'wrap',
+  },
+  plate: {
+    borderRadius: 3,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+});
+
+// ─── Main screen ──────────────────────────────────────────────────────────────
 export default function PlateCalculatorScreen() {
-  const { themeColors } = useTheme();
+  const { themeTokens } = useTheme();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const getPillarColour = useUserPrefsStore((s) => s.getPillarColour);
+  const gymColor = getPillarColour('gym');
 
   const [unit, setUnit] = useState<'kg' | 'lb'>('kg');
   const [targetInput, setTargetInput] = useState('');
   const [barInput, setBarInput] = useState('');
+  const targetRef = useRef<TextInput>(null);
 
   const plates = unit === 'kg' ? KG_PLATES : LB_PLATES;
   const defaultBar = unit === 'kg' ? DEFAULT_BAR_KG : DEFAULT_BAR_LB;
+  const target = parseFloat(targetInput) || 0;
+  const bar = parseFloat(barInput) || defaultBar;
 
-  const targetWeight = parseFloat(targetInput) || 0;
-  const barWeight = parseFloat(barInput) || defaultBar;
+  const workingPlates = target >= bar ? calculatePlates(target, bar, plates) : [];
+  const totalLoaded =
+    workingPlates.reduce((s, r) => s + r.plate * r.count * 2, 0) + bar;
+  const warmups = target > 0 ? generateWarmups(target, bar, plates) : [];
 
-  const workingPlates = calculatePlates(targetWeight, barWeight, plates);
-  const totalLoaded = workingPlates.reduce((sum, r) => sum + r.plate * r.count * 2, 0) + barWeight;
-  const warmups = targetWeight > 0 ? generateWarmups(targetWeight, barWeight, plates) : [];
-
-  const handleUnitToggle = useCallback(() => {
-    setUnit((u) => {
-      const next = u === 'kg' ? 'lb' : 'kg';
-      setBarInput('');
-      return next;
-    });
-  }, []);
-
-  const PLATE_COLORS: Record<number, string> = unit === 'kg'
-    ? { 25: '#ef4444', 20: '#3b82f6', 15: '#f59e0b', 10: '#22c55e', 5: '#ffffff', 2.5: '#a855f7', 1.25: '#64748b' }
-    : { 45: '#ef4444', 35: '#3b82f6', 25: '#f59e0b', 10: '#22c55e', 5: '#ffffff', 2.5: '#a855f7' };
+  const handleUnitToggle = (next: 'kg' | 'lb') => {
+    setUnit(next);
+    setBarInput('');
+  };
 
   return (
-    <ScrollView
-      style={{ flex: 1, backgroundColor: themeColors.background }}
-      contentContainerStyle={styles.container}
-      keyboardShouldPersistTaps="handled"
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      style={{ flex: 1, backgroundColor: themeTokens.background }}
     >
       {/* Header */}
-      <View style={styles.header}>
-        <Pressable style={styles.backBtn} onPress={() => router.canGoBack() ? router.back() : router.replace('/(tabs)')}>
-          <Feather name="arrow-left" size={22} color={themeColors.text} />
-        </Pressable>
-        <Text style={[styles.title, { color: themeColors.text }]}>Plate Calculator</Text>
+      <View
+        style={[
+          HDR.wrap,
+          {
+            paddingTop: insets.top + space[8],
+            backgroundColor: themeTokens.background,
+            borderBottomColor: themeTokens.border,
+          },
+        ]}
+      >
         <Pressable
-          style={[styles.unitToggle, { backgroundColor: themeColors.surface }]}
-          onPress={handleUnitToggle}
+          onPress={() =>
+            router.canGoBack() ? router.back() : router.replace('/(tabs)')
+          }
+          hitSlop={12}
         >
-          <Text style={[styles.unitToggleText, { color: themeColors.accent }]}>{unit.toUpperCase()}</Text>
+          <Feather name="arrow-left" size={22} color={themeTokens.textPrimary} />
         </Pressable>
-      </View>
-
-      {/* Inputs */}
-      <View style={[styles.inputCard, { backgroundColor: themeColors.surface }]}>
-        <View style={styles.inputRow}>
-          <View style={styles.inputGroup}>
-            <Text style={[styles.inputLabel, { color: themeColors.muted }]}>Target Weight</Text>
-            <View style={[styles.inputBox, { borderColor: themeColors.surfaceBorder }]}>
-              <TextInput
-                style={[styles.input, { color: themeColors.text }]}
-                value={targetInput}
-                onChangeText={setTargetInput}
-                keyboardType="decimal-pad"
-                placeholder={`e.g. ${unit === 'kg' ? '100' : '225'}`}
-                placeholderTextColor={themeColors.muted}
-              />
-              <Text style={[styles.unitLabel, { color: themeColors.muted }]}>{unit}</Text>
-            </View>
-          </View>
-
-          <View style={styles.inputGroup}>
-            <Text style={[styles.inputLabel, { color: themeColors.muted }]}>Bar Weight</Text>
-            <View style={[styles.inputBox, { borderColor: themeColors.surfaceBorder }]}>
-              <TextInput
-                style={[styles.input, { color: themeColors.text }]}
-                value={barInput}
-                onChangeText={setBarInput}
-                keyboardType="decimal-pad"
-                placeholder={String(defaultBar)}
-                placeholderTextColor={themeColors.muted}
-              />
-              <Text style={[styles.unitLabel, { color: themeColors.muted }]}>{unit}</Text>
-            </View>
-          </View>
-        </View>
-
-        {targetWeight > 0 && (
-          <View style={[styles.totalRow, { backgroundColor: themeColors.accentLight }]}>
-            <Text style={[styles.totalLabel, { color: themeColors.accent }]}>
-              Loaded bar total
-            </Text>
-            <Text style={[styles.totalValue, { color: themeColors.accent }]}>
-              {totalLoaded.toFixed(1)} {unit}
-            </Text>
-          </View>
-        )}
-      </View>
-
-      {/* Working weight plates */}
-      {targetWeight > 0 && (
-        <View style={[styles.section, { backgroundColor: themeColors.surface }]}>
-          <Text style={[styles.sectionTitle, { color: themeColors.text }]}>
-            Working Weight — {targetWeight} {unit} per side
-          </Text>
-          {workingPlates.length === 0 ? (
-            <Text style={[styles.noPlatesText, { color: themeColors.muted }]}>
-              {targetWeight <= barWeight
-                ? 'Target ≤ bar weight — no plates needed.'
-                : 'Cannot make exact weight with standard plates.'}
-            </Text>
-          ) : (
-            <View style={styles.plateVisual}>
-              {/* Bar central line */}
-              <View style={[styles.barLine, { backgroundColor: themeColors.surfaceBorder }]} />
-              <View style={styles.plateStack}>
-                {workingPlates.map((row) =>
-                  Array.from({ length: row.count }).map((_, i) => (
-                    <View
-                      key={`${row.plate}-${i}`}
-                      style={[styles.plateSlab, {
-                        backgroundColor: PLATE_COLORS[row.plate] ?? themeColors.muted,
-                        height: Math.max(28, row.plate * 1.4),
-                      }]}
-                    >
-                      <Text style={styles.plateSlabText}>{row.plate}</Text>
-                    </View>
-                  ))
-                )}
-              </View>
-              {/* Text summary */}
-              <View style={styles.plateSummary}>
-                {workingPlates.map((row) => (
-                  <View key={row.plate} style={styles.plateRow}>
-                    <View style={[styles.plateColorDot, { backgroundColor: PLATE_COLORS[row.plate] ?? themeColors.muted }]} />
-                    <Text style={[styles.plateSummaryText, { color: themeColors.text }]}>
-                      {row.count} × {row.plate} {unit}
-                    </Text>
-                    <Text style={[styles.plateSummaryBoth, { color: themeColors.muted }]}>
-                      ({row.count * 2} total)
-                    </Text>
-                  </View>
-                ))}
-              </View>
-            </View>
-          )}
-        </View>
-      )}
-
-      {/* Warm-up sets */}
-      {warmups.length > 0 && (
-        <View style={[styles.section, { backgroundColor: themeColors.surface }]}>
-          <Text style={[styles.sectionTitle, { color: themeColors.text }]}>Warm-Up Sets</Text>
-          {warmups.map((w) => (
-            <View key={w.pct} style={[styles.warmupRow, { borderBottomColor: themeColors.surfaceBorder }]}>
-              <View style={styles.warmupLeft}>
-                <Text style={[styles.warmupPct, { color: themeColors.accent }]}>{Math.round(w.pct * 100)}%</Text>
-                <Text style={[styles.warmupWeight, { color: themeColors.text }]}>{w.weight} {unit}</Text>
-              </View>
-              <View style={styles.warmupPlates}>
-                {w.plates.length === 0 ? (
-                  <Text style={[styles.warmupEmpty, { color: themeColors.muted }]}>Bar only</Text>
-                ) : (
-                  <Text style={[styles.warmupPlateText, { color: themeColors.text }]}>
-                    {w.plates.map((p) => `${p.count}×${p.plate}`).join(' + ')} each side
-                  </Text>
-                )}
-              </View>
-            </View>
+        <AppText
+          variant="title1"
+          style={{ fontWeight: '700', flex: 1, marginLeft: space[12] }}
+        >
+          Plate Calculator
+        </AppText>
+        {/* Unit pill toggle */}
+        <View
+          style={[
+            HDR.unitWrap,
+            {
+              backgroundColor: themeTokens.surface,
+              borderColor: themeTokens.border,
+            },
+          ]}
+        >
+          {(['kg', 'lb'] as const).map((u) => (
+            <Pressable
+              key={u}
+              style={[
+                HDR.unitBtn,
+                unit === u && { backgroundColor: gymColor },
+              ]}
+              onPress={() => handleUnitToggle(u)}
+            >
+              <AppText
+                variant="caption1"
+                style={{
+                  fontWeight: '600',
+                  color: unit === u ? '#fff' : themeTokens.textSecondary,
+                }}
+              >
+                {u}
+              </AppText>
+            </Pressable>
           ))}
         </View>
-      )}
+      </View>
 
-      {/* Bottom padding */}
-      <View style={{ height: 40 }} />
-    </ScrollView>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}
+        keyboardShouldPersistTaps="handled"
+      >
+        {/* Target weight input */}
+        <Pressable style={TI.area} onPress={() => targetRef.current?.focus()}>
+          <AppText
+            variant="footnote"
+            color={themeTokens.textTertiary}
+            style={{ textAlign: 'center' }}
+          >
+            {`TARGET WEIGHT (${unit.toUpperCase()})`}
+          </AppText>
+          <TextInput
+            ref={targetRef}
+            style={[TI.input, { color: themeTokens.textPrimary }]}
+            value={targetInput}
+            onChangeText={setTargetInput}
+            keyboardType="decimal-pad"
+            placeholder="0"
+            placeholderTextColor={themeTokens.textTertiary}
+            autoFocus
+            textAlign="center"
+          />
+        </Pressable>
+
+        {/* Bar weight row */}
+        <View
+          style={[
+            BW.row,
+            {
+              backgroundColor: themeTokens.surface,
+              borderColor: themeTokens.border,
+              marginHorizontal: space[16],
+            },
+          ]}
+        >
+          <AppText
+            variant="subheadline"
+            color={themeTokens.textSecondary}
+            style={{ flex: 1 }}
+          >
+            Bar weight
+          </AppText>
+          <TextInput
+            style={[
+              BW.input,
+              {
+                color: themeTokens.textPrimary,
+                borderColor: themeTokens.border,
+                backgroundColor: themeTokens.surfaceElevated,
+              },
+            ]}
+            value={barInput}
+            onChangeText={setBarInput}
+            keyboardType="decimal-pad"
+            placeholder={String(defaultBar)}
+            placeholderTextColor={themeTokens.textTertiary}
+            textAlign="right"
+          />
+          <AppText variant="footnote" color={themeTokens.textTertiary}>
+            {unit}
+          </AppText>
+        </View>
+
+        {target > 0 && (
+          <>
+            {/* Plate stack card */}
+            <View
+              style={[
+                CARD.wrap,
+                {
+                  backgroundColor: themeTokens.surfaceElevated,
+                  borderColor: themeTokens.border,
+                  marginHorizontal: space[16],
+                  marginTop: space[20],
+                },
+              ]}
+            >
+              <View style={[CARD.stripe, { backgroundColor: gymColor }]} />
+              <View style={CARD.body}>
+                <AppText
+                  variant="caption1"
+                  color={themeTokens.textTertiary}
+                  style={{ marginBottom: space[12] }}
+                >
+                  PLATES PER SIDE
+                </AppText>
+                {workingPlates.length > 0 ? (
+                  <>
+                    <PlateStack rows={workingPlates} />
+                    <View style={{ marginTop: space[12], gap: space[4] }}>
+                      {workingPlates.map((r) => (
+                        <View
+                          key={r.plate}
+                          style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            gap: space[8],
+                          }}
+                        >
+                          <View
+                            style={{
+                              width: 14,
+                              height: 14,
+                              borderRadius: 2,
+                              backgroundColor: plateColor(r.plate),
+                            }}
+                          />
+                          <AppText
+                            variant="footnote"
+                            style={{ fontWeight: '600', flex: 1 }}
+                          >
+                            {r.plate}
+                            {unit} × {r.count}
+                          </AppText>
+                          <AppText
+                            variant="footnote"
+                            color={themeTokens.textTertiary}
+                          >
+                            {r.plate * r.count}
+                            {unit} per side
+                          </AppText>
+                        </View>
+                      ))}
+                    </View>
+                  </>
+                ) : (
+                  <AppText variant="footnote" color={themeTokens.textTertiary}>
+                    Target ≤ bar weight — no plates needed.
+                  </AppText>
+                )}
+                <View
+                  style={{
+                    borderTopWidth: StyleSheet.hairlineWidth,
+                    borderTopColor: themeTokens.border,
+                    marginTop: space[12],
+                    paddingTop: space[12],
+                  }}
+                >
+                  <AppText variant="subheadline" style={{ fontWeight: '600' }}>
+                    Total on bar: {totalLoaded}
+                    {unit}
+                  </AppText>
+                </View>
+              </View>
+            </View>
+
+            {/* Warm-up table */}
+            {warmups.length > 0 && (
+              <View
+                style={[
+                  CARD.wrap,
+                  {
+                    backgroundColor: themeTokens.surfaceElevated,
+                    borderColor: themeTokens.border,
+                    marginHorizontal: space[16],
+                    marginTop: space[16],
+                  },
+                ]}
+              >
+                <View
+                  style={[CARD.stripe, { backgroundColor: themeTokens.accent }]}
+                />
+                <View style={CARD.body}>
+                  <AppText
+                    variant="caption1"
+                    color={themeTokens.textTertiary}
+                    style={{ marginBottom: space[12] }}
+                  >
+                    WARM-UP SETS
+                  </AppText>
+                  {warmups.map((w, i) => (
+                    <View
+                      key={w.pct}
+                      style={[
+                        WU.row,
+                        i < warmups.length - 1 && {
+                          borderBottomWidth: StyleSheet.hairlineWidth,
+                          borderBottomColor: themeTokens.border,
+                        },
+                      ]}
+                    >
+                      <AppText
+                        variant="subheadline"
+                        style={{ fontWeight: '700', width: 44, color: gymColor }}
+                      >
+                        {Math.round(w.pct * 100)}%
+                      </AppText>
+                      <AppText
+                        variant="subheadline"
+                        style={{ fontWeight: '600', flex: 1 }}
+                      >
+                        {w.weight}
+                        {unit}
+                      </AppText>
+                      <AppText
+                        variant="footnote"
+                        color={themeTokens.textSecondary}
+                      >
+                        {w.plates.map((r) => `${r.plate}×${r.count}`).join('  ') ||
+                          'bar only'}
+                      </AppText>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            )}
+          </>
+        )}
+
+        {/* Empty prompt */}
+        {target === 0 && (
+          <View style={{ alignItems: 'center', paddingTop: space[48] }}>
+            <Feather name="tool" size={36} color={themeTokens.textTertiary} />
+            <AppText
+              variant="body"
+              color={themeTokens.textTertiary}
+              style={{ textAlign: 'center', marginTop: space[12] }}
+            >
+              Enter a target weight above.
+            </AppText>
+          </View>
+        )}
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    padding: spacing.md,
-    paddingTop: 60,
-  },
-  header: {
+const HDR = StyleSheet.create({
+  wrap: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
-    marginBottom: spacing.lg,
+    paddingHorizontal: space[16],
+    paddingBottom: space[12],
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  backBtn: {
-    padding: spacing.xs,
-  },
-  title: {
-    flex: 1,
-    fontSize: fontSize.xl,
-    fontWeight: '700',
-  },
-  unitToggle: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    borderRadius: borderRadius.lg,
-  },
-  unitToggleText: {
-    fontWeight: '800',
-    fontSize: fontSize.md,
-  },
-  inputCard: {
-    borderRadius: borderRadius.lg,
-    padding: spacing.md,
-    marginBottom: spacing.md,
-    gap: spacing.sm,
-  },
-  inputRow: {
+  unitWrap: {
     flexDirection: 'row',
-    gap: spacing.md,
-  },
-  inputGroup: {
-    flex: 1,
-    gap: 6,
-  },
-  inputLabel: {
-    fontSize: fontSize.xs,
-    fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  inputBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    borderRadius: radius.md,
     borderWidth: 1,
-    borderRadius: borderRadius.md,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
+    overflow: 'hidden',
+  },
+  unitBtn: {
+    paddingHorizontal: space[12],
+    paddingVertical: space[8],
+  },
+});
+const TI = StyleSheet.create({
+  area: { alignItems: 'center', paddingTop: space[32], paddingBottom: space[16] },
+  input: {
+    fontSize: 64,
+    fontWeight: '800',
+    letterSpacing: -1,
+    lineHeight: 80,
+    minWidth: 120,
+    textAlign: 'center',
+  },
+});
+const BW = StyleSheet.create({
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space[12],
+    padding: space[16],
+    borderRadius: radius.md,
+    borderWidth: 1,
   },
   input: {
-    flex: 1,
-    fontSize: fontSize.xl,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
-  },
-  unitLabel: {
-    fontSize: fontSize.sm,
-    marginLeft: 4,
-  },
-  totalRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    borderRadius: borderRadius.md,
-    padding: spacing.sm,
-  },
-  totalLabel: {
-    fontSize: fontSize.sm,
-    fontWeight: '600',
-  },
-  totalValue: {
-    fontSize: fontSize.lg,
-    fontWeight: '700',
-  },
-  section: {
-    borderRadius: borderRadius.lg,
-    padding: spacing.md,
-    marginBottom: spacing.md,
-    gap: spacing.sm,
-  },
-  sectionTitle: {
-    fontSize: fontSize.md,
-    fontWeight: '700',
-    marginBottom: spacing.xs,
-  },
-  noPlatesText: {
-    fontSize: fontSize.md,
-    fontStyle: 'italic',
-  },
-  plateVisual: {
-    gap: spacing.md,
-  },
-  barLine: {
-    height: 2,
-    width: '100%',
-    borderRadius: 1,
-  },
-  plateStack: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 4,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  plateSlab: {
-    width: 48,
-    minHeight: 28,
-    borderRadius: 4,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  plateSlabText: {
-    color: '#000',
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  plateSummary: {
-    gap: spacing.xs,
-  },
-  plateRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  plateColorDot: {
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-  },
-  plateSummaryText: {
-    flex: 1,
-    fontSize: fontSize.md,
-    fontWeight: '600',
-  },
-  plateSummaryBoth: {
-    fontSize: fontSize.sm,
-  },
-  warmupRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    paddingVertical: spacing.sm,
-    borderBottomWidth: 1,
-  },
-  warmupLeft: {
     width: 80,
+    padding: space[8],
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    fontSize: 16,
+    fontWeight: '500',
   },
-  warmupPct: {
-    fontSize: fontSize.xs,
-    fontWeight: '700',
-  },
-  warmupWeight: {
-    fontSize: fontSize.md,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
-  },
-  warmupPlates: {
-    flex: 1,
-  },
-  warmupEmpty: {
-    fontSize: fontSize.sm,
-    fontStyle: 'italic',
-  },
-  warmupPlateText: {
-    fontSize: fontSize.sm,
+});
+const CARD = StyleSheet.create({
+  wrap: { borderRadius: radius.lg, borderWidth: 1, overflow: 'hidden' },
+  stripe: { height: 4 },
+  body: { padding: space[16] },
+});
+const WU = StyleSheet.create({
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: space[12],
+    gap: space[8],
   },
 });

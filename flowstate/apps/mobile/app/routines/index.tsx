@@ -79,14 +79,14 @@ export default function RoutinesScreen() {
 
   return (
     <ScreenWrapper>
-      <SectionHeader title="Routines" subtitle="Build reusable session templates" />
+      <SectionHeader title="Session Templates" subtitle="Build reusable session structures" />
 
       {routines.length === 0 ? (
         <View style={styles.empty}>
           <Feather name="layers" size={48} color={themeColors.muted} />
-          <Text style={[styles.emptyTitle, { color: themeColors.text }]}>No Routines Yet</Text>
+          <Text style={[styles.emptyTitle, { color: themeColors.text }]}>No Session Templates Yet</Text>
           <Text style={[styles.emptySubtitle, { color: themeColors.muted }]}>
-            Create a routine to define timer blocks for your sessions.
+            Create a template to define the timer blocks and flow for a session.
           </Text>
         </View>
       ) : (
@@ -116,7 +116,7 @@ export default function RoutinesScreen() {
         onPress={() => router.push('/routines/create')}
       >
         <Feather name="plus" size={20} color={themeColors.white} />
-        <Text style={[styles.createBtnText, { color: themeColors.white }]}>Create Routine</Text>
+        <Text style={[styles.createBtnText, { color: themeColors.white }]}>Create Session Template</Text>
       </Pressable>
     </ScreenWrapper>
   );

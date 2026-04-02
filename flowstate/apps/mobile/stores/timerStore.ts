@@ -30,7 +30,14 @@ async function loadTimerState() {
 
 export async function initializeTimerStore(): Promise<() => void> {
   const persisted = await loadTimerState();
-  if (persisted && persisted.sessionId && persisted.blocks && persisted.startedAt) {
+  if (
+    persisted &&
+    persisted.sessionId &&
+    persisted.blocks &&
+    persisted.startedAt &&
+    persisted.phase !== 'completed' &&
+    persisted.phase !== 'idle'
+  ) {
     useTimerStore.getState().restore(
       persisted.sessionId,
       persisted.blocks,
@@ -79,9 +86,11 @@ type TimerStoreState = TimerState & {
   blocks: TimerBlock[];
   currentBlockName: string;
   routineName: string;
+  pillar: string; // active session pillar (for FloatingActiveBlockWidget accent colour)
   elapsed: number;
   // Actions
   init: (sessionId: string, blocks: TimerBlock[], routineName?: string) => void;
+  setPillar: (pillar: string) => void;
   restore: (
     sessionId: string,
     blocks: TimerBlock[],
@@ -148,10 +157,13 @@ export const useTimerStore = create<TimerStoreState>((set) => {
     blocks: [],
     currentBlockName: '',
     routineName: '',
+    pillar: 'general',
     set,
     _engine: engine,
     _intervalId: null,
     _notifCounter: 0,
+
+    setPillar: (pillar: string) => set((state) => ({ ...state, pillar })),
 
     // ─── Actions ──────────────────────────────────────────────
 
@@ -328,18 +340,16 @@ export const useTimerStore = create<TimerStoreState>((set) => {
 
     end: async () => {
       engine.end();
-      set((state) => {
-        const newState = {
-          ...state,
-          phase: 'completed' as TimerPhase,
-          pausedAt: null,
-          elapsed: engine.elapsed,
-        };
-        saveTimerState(newState);
-        return newState;
-      });
+      set((state) => ({
+        ...state,
+        phase: 'completed' as TimerPhase,
+        pausedAt: null,
+        elapsed: engine.elapsed,
+      }));
       stopTicking();
       await stopBackgroundTimer();
+      // Clear persisted state so a reopen never restores a finished session
+      try { await AsyncStorage.removeItem(TIMER_STATE_KEY); } catch {}
     },
 
     tick: () => {

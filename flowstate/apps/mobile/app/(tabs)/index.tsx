@@ -1,490 +1,496 @@
-﻿import React, { useState, useCallback } from 'react';
-import { View, Text, Pressable, StyleSheet, ActivityIndicator, ScrollView } from 'react-native';
-import { Feather } from '@expo/vector-icons';
-import { useRouter, useFocusEffect } from 'expo-router';
-import { ScreenWrapper } from '../../components/layout/ScreenWrapper';
-import { SectionHeader } from '../../components/layout/SectionHeader';
-import { SessionCard } from '../../components/modules/SessionCard';
-import { ModuleCard } from '../../components/modules/ModuleCard';
-import { ActiveBlockWidget } from '../../components/home/ActiveBlockWidget';
-import { SwitchboardFilter, Pillar } from '../../components/home/SwitchboardFilter';
-import { BentoComingUp } from '../../components/home/BentoComingUp';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
-  getModuleSpecs,
-  getActivePlan,
-  getDayPlan as getDbDayPlan,
-  getSessionsForDay,
-  getRoutine,
-  getRoutineBlocks,
-  getAllStreaks,
-  getTasks,  getHomescreenLayout,} from '@flowstate/core';
+  ActivityIndicator,
+  Pressable,
+  StyleSheet,
+  TextInput,
+  View,
+} from 'react-native';
+import { Feather } from '@expo/vector-icons';
+import { useFocusEffect, useRouter } from 'expo-router';
+import {
+  createTask,
+  getTask,
+  updateMustDoDone,
+  updateTask,
+  upsertDayPlan,
+} from '@flowstate/core';
+import { ScreenWrapper } from '../../components/layout/ScreenWrapper';
+import { AppText } from '../../components/primitives/Text';
+import { ActiveBlockWidget } from '../../components/home/ActiveBlockWidget';
+import { PlannerAgenda } from '../../components/planner/PlannerAgenda';
+import { PlannerSessionSheet } from '../../components/planner/PlannerSessionSheet';
+import { TaskEditor, type TaskFormData } from '../../components/tasks/TaskEditor';
+import { TrackerCard } from '../../components/trackers/TrackerCard';
 import { useDatabaseSafe } from '../../components/DatabaseProvider';
-import { useModuleValue, parseNumber } from '../../hooks/useModuleValue';
-import { useDayStore } from '../../stores/dayStore';
-import { useTimerStore } from '../../stores/timerStore';
-import { fontSize, spacing, borderRadius } from '../../constants/theme';
+import { useSyncContext } from '../../components/SyncProvider';
 import { useTheme } from '../../constants/ThemeContext';
+import { radius, space } from '../../constants/theme';
+import { loadPlannerDayBundle, type PlannerDayBundle, type PlannerTracker } from '../../lib/planner';
+import { useDayStore } from '../../stores/dayStore';
 
-const PILLAR_COLORS: Record<string, string> = {
-  gym: '#ef4444',
-  academic: '#3b82f6',
-  life: '#22c55e',
-  general: '#a855f7',
-};
-
-const PILLAR_ICONS: Record<string, string> = {
-  gym: '🏋️',
-  academic: '🎓',
-  life: '🌿',
-  general: '◆',
-};
-
-/** Wrapper that wires useModuleValue so each module card is interactive */
-function HomeModuleCard({ module, compact, widthStyle, streak }: { module: any; compact?: boolean; widthStyle?: any; streak?: { currentStreak?: number; longestStreak?: number } }) {
-  const { value, setValue } = useModuleValue(module.id);
-  const config = module.config ?? {};
-
-  // Parse value for the specific type
-  let parsedValue: unknown = value;
-  if (module.type === 'checkbox') parsedValue = value === 'true' || value === '1';
-  else if (module.type === 'rating' || module.type === 'data_input' || module.type === 'tally') parsedValue = parseNumber(value);
-  else if (module.type === 'text_note' || module.type === 'photo_log') parsedValue = value ?? '';
-  // For streak modules, prefer DB-derived streaks when available
-  if (module.type === 'streak_counter' && typeof streak?.currentStreak === 'number') {
-    parsedValue = streak.currentStreak;
-  }
-
-  return (
-    <ModuleCard
-      id={module.id}
-      type={module.type}
-      label={module.label}
-      emoji={module.emoji}
-      config={config}
-      surface="homescreen"
-      compact={compact}
-      value={parsedValue}
-      onValueChange={(v) => setValue(String(v ?? ''))}
-    />
-  );
+function todayIso() {
+  return new Date().toISOString().slice(0, 10);
 }
 
-export default function HomeScreen() {
-  const router = useRouter();
-  const { db, isReady } = useDatabaseSafe();
-  const { loadDay } = useDayStore();
-  const { themeColors } = useTheme();
+function formatToday(date: string) {
+  return new Date(`${date}T12:00:00`).toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+  });
+}
 
-  const [liveModules, setLiveModules] = useState<any[]>([]);
-  const [loggedModules, setLoggedModules] = useState<any[]>([]);
-  const [todayModules, setTodayModules] = useState<any[]>([]);
-  const [todayData, setTodayData] = useState<any>(null);
-  const [todaySessions, setTodaySessions] = useState<any[]>([]);
-  const [planName, setPlanName] = useState<string | null>(null);
-  const [dayInfo, setDayInfo] = useState<{ dayNumber?: number; totalDays?: number }>({});
-  const [hasCustomLayout, setHasCustomLayout] = useState(false);
-  const [layoutWidths, setLayoutWidths] = useState<Record<string, number>>({});
-  const [streaks, setStreaks] = useState<Record<string, { currentStreak: number; longestStreak: number }>>({});
+export default function TodayScreen() {
+  const router = useRouter();
+  const { db, isReady } = useDatabaseSafe();
+  const { themeTokens } = useTheme();
+  const { syncDayPlan } = useSyncContext();
+  const dayPlan = useDayStore((state) => state.dayPlan);
+  const isLoading = useDayStore((state) => state.isLoading);
+  const loadDay = useDayStore((state) => state.loadDay);
+  const toggleMustDo = useDayStore((state) => state.toggleMustDo);
 
-  const loadData = useCallback(async () => {
-    if (!db || !isReady) return;
-    try {
-      const specs = await getModuleSpecs(db);
-      const activeSpecs = specs.filter((s: any) => !s.archivedAt);
-      const layout = await getHomescreenLayout(db);
+  const today = todayIso();
+  const [bundle, setBundle] = useState<PlannerDayBundle | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [newPriority, setNewPriority] = useState('');
+  const [showTaskEditor, setShowTaskEditor] = useState(false);
+  const [editingTask, setEditingTask] = useState<Partial<TaskFormData> | undefined>(undefined);
+  const [showSessionSheet, setShowSessionSheet] = useState(false);
 
-      if (layout.length > 0) {
-        // Use saved layout to determine module ordering and zones
-        setHasCustomLayout(true);
-        const widths: Record<string, number> = {};
-        const zone1: any[] = [];
-        const zone2: any[] = [];
-        const zone3: any[] = [];
+  const loadData = useCallback(async () => {
+    if (!db || !isReady) return;
+    await loadDay(db, today);
+    const nextBundle = await loadPlannerDayBundle(db, today);
+    setBundle(nextBundle);
+  }, [db, isReady, loadDay, today]);
 
-        for (const entry of layout) {
-          const spec = activeSpecs.find((s: any) => s.id === entry.moduleId);
-          if (!spec) continue;
-          widths[spec.id] = (entry as any).width ?? 1;
-          if (entry.zone === 1) zone1.push(spec);
-          else if (entry.zone === 2) zone2.push(spec);
-          else if (entry.zone === 3) zone3.push(spec);
-        }
-        setLiveModules(zone1);
-        setTodayModules(zone2);
-        setLoggedModules(zone3);
-        setLayoutWidths(widths);
-      } else {
-        // Fallback: derive from module placements
-        setHasCustomLayout(false);
-        const homeSpecs = activeSpecs.filter((s: any) => {
-          const placements = Array.isArray(s.placements) ? s.placements : [];
-          return placements.includes('homescreen');
-        });
-        setLiveModules(homeSpecs.filter((s: any) => s.isLive));
-        setLoggedModules(homeSpecs.filter((s: any) => !s.isLive));
-        setTodayModules([]);
-        setLayoutWidths({});
-      }
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await loadData();
+    setRefreshing(false);
+  }, [loadData]);
 
-      // Load today's data
-      const todayStr = new Date().toISOString().slice(0, 10);
-      // Hydrate day store so useModuleValue has today's values
-      await loadDay(db, todayStr);
-      const dayPlan = await getDbDayPlan(db, todayStr);
-      if (dayPlan) {
-        setTodayData(dayPlan);
-        setDayInfo({ dayNumber: dayPlan.dayNumber, totalDays: dayPlan.totalDays });
-        // Load real sessions from DB and enrich with routine data
-        try {
-          const sessionsData = await getSessionsForDay(db, dayPlan.id);
-          // Enrich sessions with routine info
-          const enriched = await Promise.all(
-            sessionsData.map(async (s: any) => {
-              try {
-                const routine = await getRoutine(db, s.routineId);
-                const blocks = await getRoutineBlocks(db, s.routineId);
-                return {
-                  ...s,
-                  durationMinutes: routine?.totalDurationMinutes ?? 0,
-                  blockCount: blocks?.length ?? 0,
-                };
-              } catch {
-                return { ...s, durationMinutes: 0, blockCount: 0 };
-              }
-            }),
-          );
-          setTodaySessions(enriched);
-        } catch {}
-      }
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [loadData]),
+  );
 
-      const plan = await getActivePlan(db);
-      if (plan) setPlanName(plan.name);
+  const priorities = dayPlan?.mustDo ?? [];
+  const prioritiesDone = dayPlan?.mustDoDone ?? [];
+  const completedPriorityCount = prioritiesDone.filter(Boolean).length;
 
-      // Load streaks for all active modules
-      try {
-        const ids = activeSpecs.map((s: any) => s.id);
-        const streakData = await getAllStreaks(db, ids);
-        setStreaks(streakData);
-      } catch {}
-    } catch (err) {
-      console.error('Failed to load homescreen data:', err);
-    }
-  }, [db, isReady]);
+  const savePriorities = useCallback(async (
+    nextMustDo: string[],
+    nextDone: boolean[],
+  ) => {
+    if (!db) return;
 
-  useFocusEffect(useCallback(() => { loadData(); }, [loadData]));
+    const existingPlan = dayPlan;
+    if (existingPlan) {
+      await upsertDayPlan(db, {
+        date: today,
+        title: existingPlan.title ?? formatToday(today),
+        dayNumber: existingPlan.dayNumber ?? undefined,
+        totalDays: existingPlan.totalDays ?? undefined,
+        mustDo: nextMustDo,
+        moduleIds: existingPlan.moduleIds ?? [],
+      });
+      await updateMustDoDone(db, existingPlan.id, nextDone);
+    } else {
+      const createdId = await upsertDayPlan(db, {
+        date: today,
+        title: formatToday(today),
+        mustDo: nextMustDo,
+        mustDoDone: nextDone,
+        moduleIds: [],
+      });
+      await updateMustDoDone(db, createdId, nextDone);
+    }
 
-  if (!isReady) {
-    return (
-      <ScreenWrapper>
-        <ActivityIndicator size="large" color={themeColors.accent} style={{ marginTop: 60 }} />
-      </ScreenWrapper>
-    );
-  }
+    syncDayPlan(today, { mustDo: nextMustDo, mustDoDone: nextDone });
+    await loadData();
+  }, [db, dayPlan, today, syncDayPlan, loadData]);
 
-  const today = todayData;
-  const doneCount = (today?.mustDoDone ?? []).filter(Boolean).length;
-  const mustDoTotal = (today?.mustDo ?? []).length;
-  const sessions = todaySessions;
+  const addPriority = useCallback(async () => {
+    const trimmed = newPriority.trim();
+    if (!trimmed) return;
+    await savePriorities(
+      [...priorities, trimmed],
+      [...prioritiesDone, false],
+    );
+    setNewPriority('');
+  }, [newPriority, priorities, prioritiesDone, savePriorities]);
 
-  return (
-    <ScreenWrapper>
-      {/* ── Header with Settings ── */}
-      <View style={styles.headerRow}>
-        <Pressable style={styles.editLayoutBtn} onPress={() => router.push('/layout-editor')}>
-          <Feather name="grid" size={18} color={themeColors.accent} />
-          <Text style={[styles.editLayoutText, { color: themeColors.accent }]}>Edit Layout</Text>
-        </Pressable>
-        <View style={{ flex: 1 }} />
-        <Pressable style={styles.settingsBtn} onPress={() => router.push('/settings')}>
-          <Feather name="settings" size={22} color={themeColors.muted} />
-        </Pressable>
-      </View>
+  const removePriority = useCallback(async (index: number) => {
+    await savePriorities(
+      priorities.filter((_, currentIndex) => currentIndex !== index),
+      prioritiesDone.filter((_, currentIndex) => currentIndex !== index),
+    );
+  }, [priorities, prioritiesDone, savePriorities]);
 
-      {/* ── Quick Stats Bar ── */}
-      {today && (
-        <View style={[styles.quickStatsBar, { backgroundColor: themeColors.surface }]}>
-          <View style={styles.quickStat}>
-            <Text style={[styles.quickStatValue, { color: themeColors.accent }]}>
-              {mustDoTotal > 0 ? Math.round((doneCount / mustDoTotal) * 100) : 0}%
-            </Text>
-            <Text style={[styles.quickStatLabel, { color: themeColors.muted }]}>Must-Dos</Text>
-          </View>
-          <View style={[styles.quickStatDivider, { backgroundColor: themeColors.border }]} />
-          <View style={styles.quickStat}>
-            <Text style={[styles.quickStatValue, { color: themeColors.text }]}>{sessions.length}</Text>
-            <Text style={[styles.quickStatLabel, { color: themeColors.muted }]}>Sessions</Text>
-          </View>
-          <View style={[styles.quickStatDivider, { backgroundColor: themeColors.border }]} />
-          <View style={styles.quickStat}>
-            <Text style={[styles.quickStatValue, { color: themeColors.text }]}>
-              {Object.values(streaks).filter(s => s.currentStreak > 0).length}
-            </Text>
-            <Text style={[styles.quickStatLabel, { color: themeColors.muted }]}>Active Streaks</Text>
-          </View>
-        </View>
-      )}
+  const openTaskEditor = useCallback(async (taskId?: string) => {
+    if (!db || !taskId) {
+      setEditingTask({ dueDate: today, pillar: 'general', priority: 2 });
+      setShowTaskEditor(true);
+      return;
+    }
 
-      {/* ── Zone 1: Live Modules ── */}
-      <SectionHeader title="Live" subtitle="Updating in real time" />
+    const task = await getTask(db, taskId);
+    if (!task) return;
+    setEditingTask({
+      id: task.id,
+      title: task.title ?? '',
+      pillar: task.pillar ?? 'general',
+      category: task.category ?? '',
+      dueDate: task.dueDate ?? today,
+      dueTime: task.dueTime ?? '',
+      priority: task.priority ?? 2,
+      notes: task.notes ?? '',
+      recurrence: task.recurrence ?? '',
+    });
+    setShowTaskEditor(true);
+  }, [db, today]);
 
-      {liveModules.length > 0 ? (
-        <View style={styles.liveGrid}>
-          {liveModules.map((m: any) => (
-            <Pressable
-              key={m.id}
-              style={[
-                styles.liveCell,
-                layoutWidths[m.id] === 2 && styles.liveCellFull,
-              ]}
-              onPress={() => router.push(`/modules/${m.id}`)}
-            >
-              <HomeModuleCard module={m} compact streak={streaks[m.id]} />
-            </Pressable>
-          ))}
-        </View>
-      ) : (
-        <View style={[styles.emptyCard, { backgroundColor: themeColors.surface }]}>
-          <Text style={[styles.emptyText, { color: themeColors.textSecondary }]}>No live modules yet</Text>
-          <Pressable onPress={() => router.push('/modules/create')}>
-            <Text style={[styles.emptyLink, { color: themeColors.accent }]}>Create a countdown, streak, or progress module →</Text>
-          </Pressable>
-        </View>
-      )}
+  const saveTask = useCallback(async (data: TaskFormData) => {
+    if (!db) return;
+    if (data.id) {
+      await updateTask(db, data.id, {
+        title: data.title,
+        pillar: data.pillar || 'general',
+        category: data.category || null,
+        dueDate: data.dueDate || null,
+        dueTime: data.dueTime || null,
+        priority: data.priority,
+        notes: data.notes || null,
+        recurrence: data.recurrence || null,
+      });
+    } else {
+      await createTask(db, {
+        title: data.title,
+        pillar: 'general',
+        category: data.category || undefined,
+        dueDate: data.dueDate || today,
+        dueTime: data.dueTime || undefined,
+        priority: data.priority,
+        notes: data.notes || undefined,
+      });
+    }
+    setShowTaskEditor(false);
+    await loadData();
+  }, [db, today, loadData]);
 
-      {/* ── Zone 2: Today Snapshot ── */}
-      <SectionHeader
-        title="Today"
-        subtitle={planName && dayInfo.dayNumber ? `Day ${dayInfo.dayNumber} of ${dayInfo.totalDays}` : today?.title}
-      />
+  const trackerItems = useMemo(() => bundle?.trackers ?? [], [bundle?.trackers]);
 
-      {/* Zone 2 modules (if any from custom layout) */}
-      {todayModules.length > 0 && (
-        <View style={styles.todayModuleGrid}>
-          {todayModules.map((m: any) => (
-            <View key={m.id} style={[
-              styles.todayModuleCell,
-              layoutWidths[m.id] === 2 && styles.todayModuleCellFull,
-            ]}>
-              <HomeModuleCard module={m} streak={streaks[m.id]} />
-            </View>
-          ))}
-        </View>
-      )}
+  if (!bundle && (isLoading || !isReady)) {
+    return (
+      <ScreenWrapper>
+        <View style={styles.loadingState}>
+          <ActivityIndicator color={themeTokens.accent} />
+          <AppText variant="footnote" color={themeTokens.textSecondary}>
+            Loading today...
+          </AppText>
+        </View>
+      </ScreenWrapper>
+    );
+  }
 
-      <View style={[styles.snapshotCard, { backgroundColor: themeColors.surface }]}>
-        <Text style={[styles.snapshotTitle, { color: themeColors.text }]}>{today?.title ?? 'No plan today'}</Text>
-        <Text style={[styles.snapshotMeta, { color: themeColors.textSecondary }]}>
-          {mustDoTotal > 0 ? `${doneCount}/${mustDoTotal} must-dos` : 'No must-dos'}
-          {dayInfo.dayNumber ? ` · Day ${dayInfo.dayNumber} of ${dayInfo.totalDays}` : ''}
-          {sessions.length > 0 ? ` · ${sessions.length} sessions` : ''}
-        </Text>
+  return (
+    <ScreenWrapper onRefresh={handleRefresh} refreshing={refreshing}>
+      <View style={styles.hero}>
+        <View style={styles.heroCopy}>
+          <AppText variant="title1" style={{ fontWeight: '700' }}>
+            Today
+          </AppText>
+          <AppText variant="subheadline" color={themeTokens.textSecondary}>
+            {formatToday(today)}
+          </AppText>
+        </View>
+        <View style={[styles.heroBadge, { backgroundColor: themeTokens.accentTint }]}>
+          <AppText variant="caption1" color={themeTokens.accent} style={{ fontWeight: '700' }}>
+            {completedPriorityCount}/{priorities.length || 0} priorities
+          </AppText>
+        </View>
+      </View>
 
-        {sessions.map((s: any) => (
-          <SessionCard
-            key={s.id}
-            sessionId={s.id}
-            routineName={s.routineName}
-            durationMinutes={s.durationMinutes ?? 0}
-            blockCount={s.blockCount ?? 0}
-            status={s.status}
-          />
-        ))}
+      <ActiveBlockWidget
+        pillar="general"
+        nextSession={bundle?.nextSession ?? null}
+        emptyActionLabel="Add Session"
+        onEmptyActionPress={() => setShowSessionSheet(true)}
+      />
 
-        <Pressable
-          style={[styles.startDayBtn, { backgroundColor: themeColors.accent }]}
-          onPress={() => router.push('/(tabs)/today')}
-        >
-          <Text style={[styles.startDayText, { color: themeColors.white }]}>Open Today →</Text>
-        </Pressable>
-      </View>
+      <View style={[styles.sectionCard, { backgroundColor: themeTokens.surfaceElevated, borderColor: themeTokens.border }]}>
+        <View style={styles.sectionHeader}>
+          <View style={styles.sectionCopy}>
+            <AppText variant="headline" style={{ fontWeight: '700' }}>
+              Top Priorities
+            </AppText>
+            <AppText variant="footnote" color={themeTokens.textSecondary}>
+              Keep the day focused on the few things that must happen.
+            </AppText>
+          </View>
+        </View>
 
-      {/* ── Zone 3: Logged Modules ── */}
-      <SectionHeader title="Daily Log" subtitle="Tap to record" />
+        <View style={styles.priorityList}>
+          {priorities.length === 0 ? (
+            <View style={styles.emptyInline}>
+              <Feather name="check-circle" size={16} color={themeTokens.textTertiary} />
+              <AppText variant="footnote" color={themeTokens.textSecondary}>
+                No priorities yet. Add one below.
+              </AppText>
+            </View>
+          ) : (
+            priorities.map((priority, index) => (
+              <View key={`${priority}-${index}`} style={styles.priorityRow}>
+                <Pressable
+                  style={[
+                    styles.priorityCheck,
+                    {
+                      borderColor: prioritiesDone[index] ? themeTokens.accent : themeTokens.borderStrong,
+                      backgroundColor: prioritiesDone[index] ? themeTokens.accent : 'transparent',
+                    },
+                  ]}
+                  onPress={() => db && toggleMustDo(db, index, syncDayPlan)}
+                  hitSlop={8}
+                >
+                  {prioritiesDone[index] ? <Feather name="check" size={12} color="#fff" /> : null}
+                </Pressable>
+                <AppText
+                  variant="body"
+                  color={prioritiesDone[index] ? themeTokens.textTertiary : themeTokens.textPrimary}
+                  style={prioritiesDone[index] ? styles.completedText : undefined}
+                  numberOfLines={2}
+                >
+                  {priority}
+                </AppText>
+                <Pressable onPress={() => removePriority(index)} hitSlop={8}>
+                  <Feather name="trash-2" size={14} color={themeTokens.textTertiary} />
+                </Pressable>
+              </View>
+            ))
+          )}
+        </View>
 
-      {loggedModules.length > 0 ? (
-        <View style={styles.logGrid}>
-          {loggedModules.map((m: any) => (
-            <View key={m.id} style={[
-              styles.logCell,
-              layoutWidths[m.id] === 2 && styles.logCellFull,
-              !layoutWidths[m.id] && styles.logCellFull,
-            ]}>
-              <HomeModuleCard module={m} streak={streaks[m.id]} />
-            </View>
-          ))}
-        </View>
-      ) : (
-        <View style={[styles.emptyCard, { backgroundColor: themeColors.surface }]}>
-          <Text style={[styles.emptyText, { color: themeColors.textSecondary }]}>No daily log modules</Text>
-          <Pressable onPress={() => router.push('/modules/create')}>
-            <Text style={[styles.emptyLink, { color: themeColors.accent }]}>Create a checkbox, rating, or text note →</Text>
-          </Pressable>
-        </View>
-      )}
+        <View style={[styles.priorityComposer, { backgroundColor: themeTokens.surface, borderColor: themeTokens.border }]}>
+          <TextInput
+            style={[styles.priorityInput, { color: themeTokens.textPrimary }]}
+            placeholder="Add a top priority..."
+            placeholderTextColor={themeTokens.textTertiary}
+            value={newPriority}
+            onChangeText={setNewPriority}
+            onSubmitEditing={addPriority}
+            returnKeyType="done"
+          />
+          <Pressable
+            style={[styles.inlineButton, { backgroundColor: themeTokens.accent }]}
+            onPress={addPriority}
+            disabled={!newPriority.trim()}
+          >
+            <Feather name="plus" size={14} color="#fff" />
+          </Pressable>
+        </View>
+      </View>
 
-      {/* Manage links */}
-      <View style={styles.manageLinkRow}>
-        <Pressable style={styles.manageBtn} onPress={() => router.push('/modules')}>
-          <Feather name="settings" size={16} color={themeColors.accent} />
-          <Text style={[styles.manageBtnText, { color: themeColors.accent }]}>Modules</Text>
-        </Pressable>
-        <Pressable style={styles.manageBtn} onPress={() => router.push('/routines')}>
-          <Feather name="layers" size={16} color={themeColors.accent} />
-          <Text style={[styles.manageBtnText, { color: themeColors.accent }]}>Routines</Text>
-        </Pressable>
-        <Pressable style={styles.manageBtn} onPress={() => router.push('/statistics')}>
-          <Feather name="bar-chart-2" size={16} color={themeColors.accent} />
-          <Text style={[styles.manageBtnText, { color: themeColors.accent }]}>Statistics</Text>
-        </Pressable>
-        <Pressable style={styles.manageBtn} onPress={() => router.push('/gallery')}>
-          <Feather name="image" size={16} color={themeColors.accent} />
-          <Text style={[styles.manageBtnText, { color: themeColors.accent }]}>Gallery</Text>
-        </Pressable>
-      </View>
-    </ScreenWrapper>
-  );
+      <View style={styles.sectionShell}>
+        <View style={styles.sectionHeader}>
+          <View style={styles.sectionCopy}>
+            <AppText variant="headline" style={{ fontWeight: '700' }}>
+              Agenda
+            </AppText>
+            <AppText variant="footnote" color={themeTokens.textSecondary}>
+              Tasks and sessions in one timeline for the day.
+            </AppText>
+          </View>
+          <View style={styles.actionRow}>
+            <Pressable
+              style={[styles.actionButton, { backgroundColor: themeTokens.surface, borderColor: themeTokens.border }]}
+              onPress={() => openTaskEditor()}
+            >
+              <AppText variant="caption1" style={{ fontWeight: '700' }}>
+                Task
+              </AppText>
+            </Pressable>
+            <Pressable
+              style={[styles.actionButton, { backgroundColor: themeTokens.surface, borderColor: themeTokens.border }]}
+              onPress={() => setShowSessionSheet(true)}
+            >
+              <AppText variant="caption1" style={{ fontWeight: '700' }}>
+                Session
+              </AppText>
+            </Pressable>
+          </View>
+        </View>
+
+        <PlannerAgenda
+          items={bundle?.agenda ?? []}
+          onTaskToggle={async (taskId, completed) => {
+            if (!db) return;
+            await updateTask(db, taskId, { completed });
+            await loadData();
+          }}
+          onTaskPress={(taskId) => openTaskEditor(taskId)}
+          onSessionPress={(sessionId) => router.push(`/session/${sessionId}` as any)}
+          emptyTitle="Your day is open"
+          emptySubtitle="Start with a task, a session, or a single top priority."
+        />
+      </View>
+
+      <View style={styles.sectionShell}>
+        <View style={styles.sectionHeader}>
+          <View style={styles.sectionCopy}>
+            <AppText variant="headline" style={{ fontWeight: '700' }}>
+              Trackers
+            </AppText>
+            <AppText variant="footnote" color={themeTokens.textSecondary}>
+              Keep the logs you actually need close to the day.
+            </AppText>
+          </View>
+          <Pressable onPress={() => router.push('/library' as any)}>
+            <AppText variant="caption1" color={themeTokens.accent} style={{ fontWeight: '700' }}>
+              Manage
+            </AppText>
+          </Pressable>
+        </View>
+
+        {trackerItems.length === 0 ? (
+          <View style={[styles.sectionCard, { backgroundColor: themeTokens.surfaceElevated, borderColor: themeTokens.border }]}>
+            <View style={styles.emptyInline}>
+              <Feather name="layers" size={16} color={themeTokens.textTertiary} />
+              <AppText variant="footnote" color={themeTokens.textSecondary}>
+                No trackers pinned for today yet.
+              </AppText>
+            </View>
+          </View>
+        ) : (
+          <View style={styles.trackerList}>
+            {trackerItems.map((tracker) => (
+              <TrackerCard key={tracker.id} tracker={tracker as PlannerTracker & any} compact onChanged={loadData} />
+            ))}
+          </View>
+        )}
+      </View>
+
+      <TaskEditor
+        visible={showTaskEditor}
+        initial={editingTask}
+        onSave={saveTask}
+        onCancel={() => setShowTaskEditor(false)}
+        hidePillar
+        defaultPillar="general"
+      />
+
+      <PlannerSessionSheet
+        visible={showSessionSheet}
+        date={today}
+        onClose={() => setShowSessionSheet(false)}
+        onSaved={loadData}
+      />
+    </ScreenWrapper>
+  );
 }
 
 const styles = StyleSheet.create({
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: spacing.xs,
-  },
-  editLayoutBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-    padding: spacing.xs,
-  },
-  editLayoutText: {
-    fontSize: fontSize.sm,
-    fontWeight: '500',
-  },
-  settingsBtn: {
-    padding: spacing.xs,
-  },
-  liveGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: spacing.sm,
-  },
-  liveCell: {
-    flex: 1,
-    minWidth: "40%",
-  },
-  liveCellFull: {
-    flex: 0,
-    width: "100%",
-    minWidth: "100%",
-  },
-  todayModuleGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: spacing.sm,
-    marginBottom: spacing.sm,
-  },
-  todayModuleCell: {
-    flex: 1,
-    minWidth: "40%",
-  },
-  todayModuleCellFull: {
-    flex: 0,
-    width: "100%",
-    minWidth: "100%",
-  },
-  logGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: spacing.sm,
-    marginBottom: spacing.sm,
-  },
-  logCell: {
-    flex: 1,
-    minWidth: "40%",
-  },
-  logCellFull: {
-    flex: 0,
-    width: "100%",
-    minWidth: "100%",
-  },
-  snapshotCard: {
-    borderRadius: borderRadius.lg,
-    padding: spacing.md,
-    marginBottom: spacing.sm,
-  },
-  snapshotTitle: {
-    fontSize: fontSize.xl,
-    fontWeight: "700",
-    marginBottom: spacing.xs,
-  },
-  snapshotMeta: {
-    fontSize: fontSize.sm,
-    marginBottom: spacing.md,
-  },
-  startDayBtn: {
-    borderRadius: borderRadius.md,
-    paddingVertical: spacing.sm + 2,
-    alignItems: "center",
-    marginTop: spacing.sm,
-  },
-  startDayText: {
-    fontSize: fontSize.md,
-    fontWeight: "600",
-  },
-  manageLinkRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: spacing.lg,
-    marginTop: spacing.sm,
-  },
-  manageBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.xs,
-    paddingVertical: spacing.sm,
-  },
-  manageBtnText: {
-    fontSize: fontSize.sm,
-    fontWeight: '500',
-  },
-  emptyCard: {
-    borderRadius: borderRadius.md,
-    padding: spacing.lg,
-    alignItems: 'center',
-    gap: spacing.xs,
-    marginBottom: spacing.sm,
-  },
-  emptyText: {
-    fontSize: fontSize.sm,
-  },
-  emptyLink: {
-    fontSize: fontSize.sm,
-    fontWeight: '500',
-  },
-  quickStatsBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-evenly',
-    borderRadius: borderRadius.lg,
-    paddingVertical: spacing.md,
-    marginBottom: spacing.md,
-  },
-  quickStat: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  quickStatValue: {
-    fontSize: fontSize.xl,
-    fontWeight: '700',
-  },
-  quickStatLabel: {
-    fontSize: fontSize.xs,
-    marginTop: 2,
-  },
-  quickStatDivider: {
-    width: 1,
-    height: 32,
-  },
+  hero: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: space[12],
+    marginBottom: space[12],
+  },
+  heroCopy: {
+    flex: 1,
+    gap: space[4],
+  },
+  heroBadge: {
+    borderRadius: radius.full,
+    paddingHorizontal: space[12],
+    paddingVertical: space[8],
+  },
+  sectionShell: {
+    marginTop: space[24],
+    gap: space[12],
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: space[12],
+  },
+  sectionCopy: {
+    flex: 1,
+    gap: space[4],
+  },
+  sectionCard: {
+    borderWidth: 1,
+    borderRadius: radius.xl,
+    padding: space[16],
+    gap: space[12],
+  },
+  priorityList: {
+    gap: space[8],
+  },
+  priorityRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space[12],
+  },
+  priorityCheck: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  completedText: {
+    textDecorationLine: 'line-through',
+  },
+  priorityComposer: {
+    borderWidth: 1,
+    borderRadius: radius.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space[8],
+    paddingHorizontal: space[12],
+    paddingVertical: space[12],
+  },
+  priorityInput: {
+    flex: 1,
+    fontSize: 16,
+    paddingVertical: 0,
+  },
+  inlineButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyInline: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space[8],
+  },
+  actionRow: {
+    flexDirection: 'row',
+    gap: space[8],
+  },
+  actionButton: {
+    borderWidth: 1,
+    borderRadius: radius.full,
+    paddingHorizontal: space[12],
+    paddingVertical: space[8],
+  },
+  trackerList: {
+    gap: space[8],
+  },
+  loadingState: {
+    alignItems: 'center',
+    gap: space[12],
+    paddingTop: space[48],
+  },
 });

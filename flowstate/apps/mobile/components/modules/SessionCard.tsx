@@ -27,11 +27,13 @@ export function SessionCard({
   const router = useRouter();
   const [plannerOpen, setPlannerOpen] = useState(false);
 
-  const statusConfig = {
+  const statusConfig = ({
     pending: { icon: 'play' as const, color: themeColors.accent, bg: themeColors.accentLight, label: 'Start' },
     in_progress: { icon: 'clock' as const, color: themeColors.warning, bg: '#FEF3C7', label: 'Resume' },
     completed: { icon: 'check-circle' as const, color: themeColors.success, bg: '#DCFCE7', label: 'Done' },
-  }[status];
+    abandoned: { icon: 'rotate-ccw' as const, color: themeColors.textSecondary, bg: themeColors.surface, label: 'Abandoned' },
+  } as Record<string, { icon: any; color: string; bg: string; label: string }>)[status]
+    ?? { icon: 'play' as const, color: themeColors.accent, bg: themeColors.accentLight, label: 'Start' };
 
   return (
     <>

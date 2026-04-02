@@ -1,123 +1,105 @@
-/**
- * SwitchboardFilter (Feature: Homescreen Overhaul - Zone 3)
- *
- * Three floating pill-shaped capsule buttons: Gym, Academic, Life.
- * These act as additive filters on the timeline below.
- * - All three are active by default.
- * - Tapping a pill toggles it. Multiple can be active simultaneously.
- * - An 'All' shortcut resets all three.
- * - Active pills use pillar fill colour with white text.
- * - Filter state persists in homeStore.
+﻿/**
+ * SwitchboardFilter — V2 spec §1.3
  */
-
 import React, { useCallback } from 'react';
-import { View, Text, Pressable, StyleSheet } from 'react-native';
-import * as Haptics from 'expo-haptics';
-import { fontSize, spacing, borderRadius } from '../../constants/theme';
+import { Pressable, StyleSheet, ScrollView } from 'react-native';
+import { Feather } from '@expo/vector-icons';
+import { AppText } from '../primitives/Text';
+import { space, radius } from '../../constants/theme';
 import { useTheme } from '../../constants/ThemeContext';
+import { useUserPrefsStore, type Pillar } from '../../stores/userPrefsStore';
+import { useHaptics } from '../../hooks/useHaptics';
 
-export type Pillar = 'gym' | 'academic' | 'life';
+export type { Pillar };
 
-const PILLARS: { key: Pillar; label: string; icon: string; color: string }[] = [
-  { key: 'gym', label: 'Gym', icon: '🏋️', color: '#ef4444' },
-  { key: 'academic', label: 'Academic', icon: '🎓', color: '#3b82f6' },
-  { key: 'life', label: 'Life', icon: '🌿', color: '#22c55e' },
+const PILLAR_META = [
+  { key: 'gym' as Pillar,      label: 'Gym',      icon: 'activity' as const },
+  { key: 'academic' as Pillar, label: 'Academic', icon: 'book-open' as const },
+  { key: 'life' as Pillar,     label: 'Life',     icon: 'heart' as const },
 ];
 
 interface Props {
   active: Set<Pillar>;
-  onChange: (next: Set<Pillar>) => void;
+  onToggle: (p: Pillar) => void;
+  onReset: () => void;
 }
 
-export function SwitchboardFilter({ active, onChange }: Props) {
-  const { themeColors } = useTheme();
+export function SwitchboardFilter({ active, onToggle, onReset }: Props) {
+  const { themeTokens } = useTheme();
+  const getPillarColour = useUserPrefsStore(s => s.getPillarColour);
+  const haptic = useHaptics();
 
-  const toggle = useCallback(
-    (pillar: Pillar) => {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      const next = new Set(active);
-      if (next.has(pillar)) {
-        // Don't allow deselecting all
-        if (next.size > 1) next.delete(pillar);
-      } else {
-        next.add(pillar);
-      }
-      onChange(next);
-    },
-    [active, onChange],
-  );
+  const handleToggle = useCallback((p: Pillar) => {
+    haptic.selection();
+    onToggle(p);
+  }, [onToggle, haptic]);
 
-  const handleAll = useCallback(() => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    onChange(new Set<Pillar>(['gym', 'academic', 'life']));
-  }, [onChange]);
+  const handleReset = useCallback(() => {
+    haptic.selection();
+    onReset();
+  }, [onReset, haptic]);
 
-  const allActive = active.size === 3;
+  const allActive = active.has('gym') && active.has('academic') && active.has('life');
 
   return (
-    <View style={styles.row}>
-      {/* All shortcut */}
-      <Pressable
-        style={[
-          styles.pill,
-          { backgroundColor: allActive ? themeColors.text : themeColors.surface },
-        ]}
-        onPress={handleAll}
-      >
-        <Text style={[
-          styles.pillText,
-          { color: allActive ? themeColors.background : themeColors.muted },
-        ]}>
-          All
-        </Text>
-      </Pressable>
-
-      {/* Individual pillar pills */}
-      {PILLARS.map(({ key, label, icon, color }) => {
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={[styles.row, { paddingHorizontal: space[16] }]}
+      style={styles.scroll}
+    >
+      {PILLAR_META.map(({ key, label, icon }) => {
         const isActive = active.has(key);
+        const fillColor = getPillarColour(key);
         return (
           <Pressable
             key={key}
             style={[
               styles.pill,
-              { backgroundColor: isActive ? color : themeColors.surface },
+              isActive
+                ? { backgroundColor: fillColor, borderColor: 'transparent', borderWidth: 1 }
+                : { backgroundColor: themeTokens.surface, borderColor: themeTokens.border, borderWidth: 1 },
             ]}
-            onPress={() => toggle(key)}
+            onPress={() => handleToggle(key)}
           >
-            <Text style={styles.pillIcon}>{icon}</Text>
-            <Text style={[
-              styles.pillText,
-              { color: isActive ? '#fff' : themeColors.muted },
-            ]}>
+            <Feather name={icon} size={14} color={isActive ? '#FFFFFF' : themeTokens.textSecondary} />
+            <AppText
+              variant="subheadline"
+              color={isActive ? '#FFFFFF' : themeTokens.textSecondary}
+              style={isActive ? styles.bold : undefined}
+            >
               {label}
-            </Text>
+            </AppText>
           </Pressable>
         );
       })}
-    </View>
+      {!allActive && (
+        <Pressable
+          style={[styles.pill, { backgroundColor: themeTokens.accentTint, borderColor: 'transparent', borderWidth: 1 }]}
+          onPress={handleReset}
+        >
+          <AppText variant="subheadline" color={themeTokens.accent}>All</AppText>
+        </Pressable>
+      )}
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
+  scroll: { flexGrow: 0 },
   row: {
     flexDirection: 'row',
-    gap: spacing.xs,
-    marginBottom: spacing.md,
-    flexWrap: 'wrap',
+    gap: space[8],
+    alignItems: 'center',
+    paddingVertical: space[4],
   },
   pill: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: borderRadius.lg,
-    paddingVertical: 8,
-    paddingHorizontal: spacing.md,
-    gap: 5,
+    borderRadius: radius.full,
+    paddingVertical: space[8],
+    paddingHorizontal: space[12],
+    gap: space[4],
   },
-  pillIcon: {
-    fontSize: 13,
-  },
-  pillText: {
-    fontSize: fontSize.sm,
-    fontWeight: '600',
-  },
+  bold: { fontWeight: '600' },
 });

@@ -11,6 +11,23 @@ import {
 import { getDbInstance } from './config';
 import { getUid } from './auth';
 
+function getFirebaseErrorCode(error: unknown): string {
+  return typeof error === 'object' && error && 'code' in error
+    ? String((error as { code?: unknown }).code ?? '')
+    : '';
+}
+
+function logSyncListenerError(scope: string, error: unknown): void {
+  const code = getFirebaseErrorCode(error);
+
+  if (code === 'permission-denied') {
+    console.log(`[Sync] ${scope} is unavailable with the current Firestore permissions.`);
+    return;
+  }
+
+  console.warn(`[Sync] ${scope} listener failed:`, error);
+}
+
 // ─── Device ID ──────────────────────────────────────────────────
 // Each device generates a unique ID on first launch.
 // Used to filter out own writes from Firestore snapshot listeners
@@ -139,6 +156,10 @@ export async function pushToFirestore(
     const docRef = doc(getDbInstance(), docPath, docId);
     await setDoc(docRef, payload, { merge: true });
   } catch (err) {
+    if (getFirebaseErrorCode(err) === 'permission-denied') {
+      console.log(`[Sync] ${collectionName}/${docId} write is unavailable with the current Firestore permissions.`);
+      return;
+    }
     console.warn('[Sync] Push failed, queuing for retry:', err);
     enqueueCommand({ collectionPath: docPath, docId, data: payload });
   }
@@ -168,15 +189,21 @@ export function listenForRemoteChanges(
 
   const docRef = doc(getDbInstance(), `users/${uid}/${collectionName}`, docId);
 
-  return onSnapshot(docRef, (snap) => {
-    if (!snap.exists()) return;
-    const data = snap.data();
+  return onSnapshot(
+    docRef,
+    (snap) => {
+      if (!snap.exists()) return;
+      const data = snap.data();
 
-    // Filter out own writes to prevent echo
-    if (data.deviceId === getDeviceId()) return;
+      // Filter out own writes to prevent echo
+      if (data.deviceId === getDeviceId()) return;
 
-    onUpdate(data);
-  });
+      onUpdate(data);
+    },
+    (error) => {
+      logSyncListenerError(`${collectionName}/${docId}`, error);
+    },
+  );
 }
 
 // ─── Timer State Sync ───────────────────────────────────────────
@@ -258,20 +285,26 @@ export function listenCollection(
 
   const colRef = collection(getDbInstance(), `users/${uid}/${collectionName}`);
 
-  return onSnapshot(colRef, (snapshot) => {
-    const remoteDocs: Array<{ id: string; data: DocumentData }> = [];
-    snapshot.docChanges().forEach((change) => {
-      if (change.type === 'added' || change.type === 'modified') {
-        const data = change.doc.data();
-        // Skip own-device writes
-        if (data.deviceId === getDeviceId()) return;
-        remoteDocs.push({ id: change.doc.id, data });
+  return onSnapshot(
+    colRef,
+    (snapshot) => {
+      const remoteDocs: Array<{ id: string; data: DocumentData }> = [];
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === 'added' || change.type === 'modified') {
+          const data = change.doc.data();
+          // Skip own-device writes
+          if (data.deviceId === getDeviceId()) return;
+          remoteDocs.push({ id: change.doc.id, data });
+        }
+      });
+      if (remoteDocs.length > 0) {
+        onUpdate(remoteDocs);
       }
-    });
-    if (remoteDocs.length > 0) {
-      onUpdate(remoteDocs);
-    }
-  });
+    },
+    (error) => {
+      logSyncListenerError(collectionName, error);
+    },
+  );
 }
 
 // ─── Full Collection Pull ───────────────────────────────────────

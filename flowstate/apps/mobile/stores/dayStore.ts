@@ -118,8 +118,12 @@ export const useDayStore = create<DayStoreState>((set, get) => ({
   setModuleValue: async (db: any, moduleId: string, value: string, onSync?: (date: string, moduleId: string, value: string) => void) => {
     const { date, moduleValues } = get();
 
-    // Optimistic update
     const existing = moduleValues.find(v => v.moduleId === moduleId);
+    if (existing?.value === value) {
+      return;
+    }
+
+    // Optimistic update
     if (existing) {
       set({
         moduleValues: moduleValues.map(v =>
